@@ -1,0 +1,9 @@
+--deep-twilight: #03045eff;
+--french-blue: #023e8aff;
+--bright-teal-blue: #0077b6ff;
+--blue-green: #0096c7ff;
+--turquoise-surf: #00b4d8ff;
+--sky-aqua: #48cae4ff;
+--frosted-blue: #90e0efff;
+--frosted-blue-2: #ade8f4ff;
+--light-cyan: #caf0f8ff;

@@ -1,0 +1,77 @@
+:root {
+  /* style.txt 9 色板 */
+  --c-950: #03045e;
+  --c-800: #023e8a;
+  --c-700: #0077b6;
+  --c-600: #0096c7;
+  --c-500: #00b4d8;
+  --c-400: #48cae4;
+  --c-300: #90e0ef;
+  --c-200: #ade8f4;
+  --c-100: #caf0f8;
+
+  /* 基础 */
+  --bg: #000000;
+  --text: #ffffff;
+  --text-dim: rgba(255, 255, 255, 0.72);
+
+  /* 蓝色前景（透明色叠纯黑：最终亮度 = 颜色 × alpha，一律按「叠黑后的效果」定值）
+     rgb(52 144 191 / 52%) 叠黑 ≈ #1b4b63 */
+  --glass-bg: rgb(52 144 191 / 52%);
+  /* 顶栏/浮层：偏灰蓝、更实，rgb(61 103 125 / 64%) 叠黑 ≈ #274250 */
+  --glass-bg-strong: rgb(61 103 125 / 64%);
+  --glass-border: rgb(20 138 195 / 45%);
+  /* 卡片 hover：叠黑 ≈ rgb(24,87,119)，比默认态 rgb(27,75,99) 更亮更蓝 */
+  --glass-hover: rgb(47 167 228 / 52%);
+  --glass-blur: blur(18px);
+
+  /* 实心填充（按钮、选中页签、徽标） */
+  --fill: rgb(28 128 180);
+  --fill-hover: rgb(38 148 202);
+
+  /* 蓝色强调（细线、标签、聚焦环），由同一色相派生 */
+  --accent: rgb(140 198 226);
+  --accent-soft: rgb(140 198 226 / 18%);
+  --accent-faint: rgb(150 205 232 / 8%);
+  /* 面板内嵌输入框：比面板亮一档 */
+  --field-bg: rgb(180 218 238 / 16%);
+
+  --radius-lg: 20px;
+  --content-w: 880px;
+  --timeline-w: 1280px;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  overflow-x: hidden;
+}
+
+::selection {
+  background: rgba(140, 198, 226, 0.35);
+}
+
+/* 毛玻璃卡片基类 */
+.glass {
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  backdrop-filter: var(--glass-blur);
+  -webkit-backdrop-filter: var(--glass-blur);
+  border-radius: var(--radius-lg);
+}
+
+/* 滚动条 */
+::-webkit-scrollbar {
+  width: 10px;
+}
+::-webkit-scrollbar-thumb {
+  background: rgb(83 155 216 / 50%);
+  border-radius: 5px;
+}
+::-webkit-scrollbar-track {
+  background: transparent;
+}
