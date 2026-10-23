@@ -105,7 +105,6 @@ const site = useSiteStore();
 .nav-link.active {
   color: #ffffff;
   background: var(--fill);
-  font-weight: 600;
 }
 
 .user-chip {

@@ -164,3 +164,33 @@
 
 - `web/src/styles/tokens.css` 的 `::-webkit-scrollbar-thumb` 由 `rgba(28,128,180,.5)` 改为 `rgb(83 155 216 / 50%)`（宽 10px、圆角 5px、轨道透明，均未变）。
 - 实测：CSSOM 中 `::-webkit-scrollbar-thumb` 生效值为 `rgba(83, 155, 216, 0.5)`，首页文档高度 2948px > 视口，滚动条可见。`npm run build` 0 错误。
+
+## 16. 玻璃底色微调 + 文章卡片毛玻璃（用户指定：`--glass-bg: rgb(52 128 191 / 52%)`、`--glass-hover: rgb(61 140 205 / 52%)`）
+
+- `web/src/styles/tokens.css`：`--glass-bg` → `rgb(52 128 191 / 52%)`（叠黑 ≈ `rgb(27,67,99)`）、`--glass-hover` → `rgb(61 140 205 / 52%)`（叠黑 ≈ `rgb(32,73,107)`）；`--glass-blur` 由 `blur(18px)` 改为 `blur(18px) saturate(140%)`（毛玻璃透出的光更通透）。
+- 毛玻璃此前「有 blur 但看不见」：卡片背后是纯黑 + 稀疏小星点，没有可被模糊的内容。`web/src/components/StarField.vue` 新增漂移光晕层：7–11 团深蓝光晕（色池 `0,119,182 / 0,150,199 / 0,180,216 / 72,202,228`，r=300–520px，v=2–7px/s，中心 alpha 0.16–0.26，`globalCompositeOperation='lighter'`），x 固定落在 `0.15w–0.85w` 内容带，出界从对侧回绕；光斑从卡片背后经过时 backdrop-filter 模糊出柔散光块，毛玻璃肉眼可辨。
+- `web/src/components/ArticleCard.vue`：补玻璃质感细节——常态顶缘高光 `inset 0 1px 0 rgba(255,255,255,.14)` + 极淡内描边；hover 时高光加强至 `.22` 并加投影 `0 10px 34px rgba(2,62,138,.38)`。
+- 实测（Chrome 5180，计算样式）：卡片 `backdrop-filter: blur(18px) saturate(1.4)`、`background: rgba(52,128,191,0.52)`；hover 后 `rgba(61,140,205,0.52)` + 边框 `rgba(186,222,240,0.5)`；截图可见光斑在卡内比卡外更柔散、hover 卡明显亮于邻卡。`npm run build`（`vue-tsc --noEmit && vite build`）0 错误。
+
+## 17. 删除光斑 + 文章卡片改透明（用户要求：删除光斑；卡片改用透明效果）
+
+- `web/src/components/StarField.vue`：整体移除第 16 轮加入的漂移光晕层（Glow 接口、GLOW_COLORS 色池、spawnGlow、resize/frame 中的光晕逻辑），恢复纯黑底 + 向上漂浮星点。
+- `web/src/components/ArticleCard.vue`：去掉 `.glass` class，卡片不再用 `--glass-bg`/backdrop-filter——默认 `background: transparent`、细描边 `rgb(140 198 226 / 22%)`、圆角 `var(--radius-lg)`；删除玻璃高光内描边；hover 改为极淡蓝薄膜 `rgb(52 128 191 / 14%)` + 边框 `rgb(140 198 226 / 45%)` + 投影 `0 8px 28px rgba(2,62,138,.25)`。
+- 实测（Chrome 5180，计算样式/截图）：卡片 `background: rgba(0,0,0,0)`、`backdrop-filter: none`，星点直接穿过卡片区域可见；CSSOM 中 `.card:hover` 规则 bg=`rgba(52,128,191,0.14)`。`npm run build` 0 错误。README 界面要点已同步。
+
+## 18. 透明卡回调：保留背景色、只提高透明度（用户要求：卡片仍需要有背景颜色，只是增加透明度）
+
+- `web/src/components/ArticleCard.vue`：默认态由 `transparent` 回调为半透明蓝底 `rgb(52 128 191 / 28%)`（颜色同 `--glass-bg` 色相，alpha 52% → 28%，叠黑 ≈ `rgb(15,36,53)`）；hover 同步回调为 `rgb(61 140 205 / 42%)`（叠黑 ≈ `rgb(26,59,86)`）。细描边、圆角、无 backdrop-filter、投影均沿用第 17 轮。
+- 实测（Chrome 5180）：计算样式 bg=`rgba(52,128,191,0.28)`、border=`rgba(140,198,226,0.22)`；截图确认卡片有明显蓝底且星点可透出。`npm run build` 0 错误。README 已同步。
+
+## 19. 玻璃底色第三次微调 + 输入框提示文本提亮（用户指定：`--glass-bg: rgb(61 120 169 / 50%)`；反馈输入框提示文本颜色太深）
+
+- `web/src/styles/tokens.css`：`--glass-bg` → `rgb(61 120 169 / 50%)`（叠黑 ≈ `rgb(31,60,85)`；用户消息写作 `--glass-gb`，按上下文判定为 `--glass-bg` 笔误）。影响顶栏、关于页区块等所有 `.glass` 面；文章卡片半透明底 `rgb(52 128 191 / 28%)` 不变。
+- 同文件新增全局 `::placeholder { color: rgba(233, 244, 250, 0.6); opacity: 1 }`——此前无任何 placeholder 规则，浏览器默认灰（约 #757575）在深色输入框上太暗。
+- 实测（Chrome 5180 /login）：`--glass-bg` 计算值 `rgb(61 120 169 / 50%)`；邮箱输入框 `::placeholder` color=`rgba(233,244,250,0.6)`、opacity=1，截图确认「you@example.com」「请输入密码」清晰可读。`npm run build` 0 错误。README 已同步。
+
+## 20. 顶栏选项卡去 font-weight + 填充色改半透明白（用户要求：删除顶部选项卡的 font-weight 属性；`--fill: rgb(255 255 255 / 15%)`）
+
+- `web/src/components/TopBar.vue`：`.nav-link.active` 删除 `font-weight: 600`（三个 font-weight 中仅此一处属于导航选项卡；`.brand-name` 700 与 `.btn-login` 600 非选项卡，保留）。
+- `web/src/styles/tokens.css`：`--fill: rgb(28 128 180)` → `rgb(255 255 255 / 15%)`；`--fill-hover` 同步改为 `rgb(255 255 255 / 25%)`（用户未指定 hover，按同系提亮一档补齐，避免残留实心蓝 hover）。使用方（首页「首页」激活态、ConsoleView 选中 tab/管理员徽标等）无需改动。
+- 实测（Chrome 5180）：激活导航项 bg=`rgba(255,255,255,0.15)`、font-weight=`400`（无加粗）；根变量两值匹配。`npm run build` 0 错误。README 已同步。

@@ -1,5 +1,5 @@
 <template>
-  <article class="card glass" @click="go">
+  <article class="card" @click="go">
     <div v-if="article.pinned" class="pin" title="置顶">置顶</div>
     <h2 class="title">{{ article.title }}</h2>
     <p v-if="article.summary" class="summary">{{ article.summary }}</p>
@@ -33,17 +33,20 @@ function go() {
   position: relative;
   padding: 22px 26px;
   cursor: pointer;
+  background: rgb(52 128 191 / 28%);
+  border: 1px solid rgb(140 198 226 / 22%);
+  border-radius: var(--radius-lg);
   transition:
     background-color 0.45s ease,
     border-color 0.45s ease,
     box-shadow 0.45s ease;
 }
 
-/* 悬浮：颜色逐渐变淡（不变形、不位移）
-   同色相提亮，叠黑后 ≈ #476a7d，比默认态 #1b4b63 更淡 */
+/* 悬浮：底色提亮一档（同色相、不位移） */
 .card:hover {
-  background-color: var(--glass-hover);
-  border-color: rgb(186 222 240 / 50%);
+  background-color: rgb(61 140 205 / 42%);
+  border-color: rgb(140 198 226 / 45%);
+  box-shadow: 0 8px 28px rgba(2, 62, 138, 0.25);
 }
 
 .pin {

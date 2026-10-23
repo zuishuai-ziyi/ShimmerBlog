@@ -61,6 +61,7 @@ onMounted(() => {
     last = now;
     const k = dt / 16.7; // 归一到 60fps 步长
     ctx.clearRect(0, 0, w, h);
+
     ctx.fillStyle = '#ffffff';
     for (let i = 0; i < stars.length; i++) {
       const s = stars[i];
