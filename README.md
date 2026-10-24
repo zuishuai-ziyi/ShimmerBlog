@@ -94,8 +94,9 @@ cd ../web && npm run dev
 | `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 是否可用） |
 | `POST /api/auth/register` | 邮箱 + 密码注册 |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
-| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性） |
+| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `reset`，`reset` 仅向已注册邮箱发送） |
 | `POST /api/auth/login/code` | 验证码登录（邮箱不存在则自动注册） |
+| `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
 | `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` | 当前用户 / 改名 / 换头像 |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |

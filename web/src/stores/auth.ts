@@ -5,6 +5,8 @@ export interface User {
   id: number;
   email: string | null;
   name: string;
+  name_color: string | null;
+  bio: string | null;
   avatar_url: string | null;
   role: 'user' | 'admin';
   email_verified: number;
@@ -18,7 +20,6 @@ export const useAuthStore = defineStore('auth', {
   }),
   getters: {
     isLoggedIn: (s) => !!s.token,
-    isAdmin: (s) => s.user?.role === 'admin',
   },
   actions: {
     setToken(t: string) {

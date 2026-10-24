@@ -16,6 +16,9 @@ CREATE TABLE IF NOT EXISTS users (
   password_hash VARCHAR(255) NULL,
   name VARCHAR(50) NOT NULL,
   avatar_url VARCHAR(500) NULL,
+  name_color VARCHAR(20) NULL,
+  bio VARCHAR(500) NULL,
+  permissions JSON NULL,
   role ENUM('user','admin') NOT NULL DEFAULT 'user',
   status ENUM('active','disabled') NOT NULL DEFAULT 'active',
   github_id BIGINT UNSIGNED NULL UNIQUE,
@@ -44,7 +47,7 @@ CREATE TABLE IF NOT EXISTS email_codes (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   email VARCHAR(255) NOT NULL,
   code VARCHAR(6) NOT NULL,
-  purpose ENUM('login','register','bind') NOT NULL DEFAULT 'login',
+  purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login',
   expires_at DATETIME NOT NULL,
   used TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -58,7 +61,19 @@ CREATE TABLE IF NOT EXISTS settings (
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
 `;
 
-/** 建库、建表、种子管理员。幂等，可重复执行。 */
+/** 已存在的老库补列（CREATE TABLE IF NOT EXISTS 不会迁移已有表） */
+async function ensureColumn(table, column, ddl) {
+  const [cols] = await pool.query(
+    'SELECT COLUMN_NAME FROM information_schema.COLUMNS WHERE TABLE_SCHEMA = DATABASE() AND TABLE_NAME = ? AND COLUMN_NAME = ?',
+    [table, column]
+  );
+  if (cols.length === 0) {
+    await pool.query(`ALTER TABLE \`${table}\` ADD COLUMN ${ddl}`);
+    console.log(`[db] 已为 ${table} 补充列 ${column}`);
+  }
+}
+
+/** 建库、建表、补列、种子管理员密码。幂等，可重复执行。 */
 export async function initDatabase() {
   // 1. 建库（不能走 pool，因为 pool 需要库已存在）
   const bootstrap = await mysql.createConnection({
@@ -76,16 +91,20 @@ export async function initDatabase() {
   await bootstrap.query(SCHEMA_SQL);
   await bootstrap.end();
 
-  // 2. 种子管理员（不存在才创建）
-  const [rows] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [config.admin.email]);
-  if (rows.length === 0) {
+  // 2. 老库补列（权限 / 名称颜色 / 简介）
+  await ensureColumn('users', 'name_color', 'name_color VARCHAR(20) NULL AFTER avatar_url');
+  await ensureColumn('users', 'bio', 'bio VARCHAR(500) NULL AFTER name_color');
+  await ensureColumn('users', 'permissions', 'permissions JSON NULL AFTER bio');
+  await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login'").catch(() => {});
+
+  // 3. 独立管理员密码（不再使用管理员用户账号）：不存在才用初始密码种子
+  const [pw] = await pool.query("SELECT value FROM settings WHERE `key` = 'admin_password_hash' LIMIT 1");
+  if (pw.length === 0) {
     const hash = await bcrypt.hash(config.admin.password, 10);
     await pool.query(
-      'INSERT INTO users (email, password_hash, name, role, email_verified) VALUES (?, ?, ?, ?, 1)',
-      [config.admin.email, hash, config.admin.name, 'admin']
+      "INSERT INTO settings (`key`, value) VALUES ('admin_password_hash', ?)",
+      [hash]
     );
-    console.log(`[db] 种子管理员已创建: ${config.admin.email}`);
-  } else {
-    console.log('[db] 种子管理员已存在，跳过');
+    console.log('[db] 已写入初始管理密码（可在后台修改）');
   }
 }

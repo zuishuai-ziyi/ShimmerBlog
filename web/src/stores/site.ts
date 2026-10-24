@@ -7,6 +7,8 @@ export interface SiteInfo {
   description: string;
   registerOpen: boolean;
   githubEnabled: boolean;
+  logoUrl: string;
+  aboutHtml: string;
 }
 
 export const useSiteStore = defineStore('site', {
@@ -17,6 +19,8 @@ export const useSiteStore = defineStore('site', {
       description: '微光博客 —— 一个会发光的个人博客角落。',
       registerOpen: true,
       githubEnabled: false,
+      logoUrl: '',
+      aboutHtml: '',
     } as SiteInfo,
     loaded: false,
   }),

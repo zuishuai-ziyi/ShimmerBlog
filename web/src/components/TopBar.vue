@@ -2,7 +2,7 @@
   <header class="topbar-zone">
     <div class="topbar glass">
       <router-link to="/" class="brand">
-        <img src="/logo.png" :alt="site.info.title" class="logo" />
+        <img :src="site.info.logoUrl || '/logo.png'" :alt="site.info.title" class="logo" />
         <span class="brand-name">{{ site.info.title }}</span>
       </router-link>
 
@@ -13,8 +13,9 @@
         <template v-if="auth.user">
           <router-link to="/console" class="user-chip" title="控制台">
             <img class="avatar" :src="auth.user.avatar_url || defaultAvatar" alt="" />
-            <span class="uname">{{ auth.user.name }}</span>
+            <span class="uname" :style="auth.user.name_color ? { color: auth.user.name_color } : undefined">{{ auth.user.name }}</span>
           </router-link>
+          <router-link to="/admin" class="nav-link admin-link" title="管理后台">后台</router-link>
         </template>
         <router-link v-else to="/login" class="btn-login">登录</router-link>
       </nav>
@@ -138,6 +139,11 @@ const site = useSiteStore();
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
+}
+
+.admin-link {
+  font-size: 13.5px;
+  padding: 6px 12px;
 }
 
 .btn-login {

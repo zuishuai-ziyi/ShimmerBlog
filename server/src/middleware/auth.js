@@ -20,7 +20,16 @@ export async function authRequired(req, res, next) {
   next();
 }
 
+/** 独立管理员鉴权：/admin 用的 JWT（与用户体系分离，不再使用管理员用户账号） */
 export function adminRequired(req, res, next) {
-  if (req.user?.role !== 'admin') return res.status(403).json({ error: '需要管理员权限' });
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return res.status(401).json({ error: '未登录管理后台' });
+  try {
+    const payload = jwt.verify(token, config.jwtSecret + ':admin');
+    if (!payload.admin) throw new Error('not admin token');
+  } catch {
+    return res.status(401).json({ error: '后台登录已过期，请重新登录' });
+  }
   next();
 }

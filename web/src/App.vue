@@ -1,14 +1,18 @@
 <template>
-  <StarField />
-  <TopBar />
+  <StarField v-if="route.name !== 'admin'" />
+  <TopBar v-if="route.name !== 'admin'" />
   <div class="app-shell">
     <router-view />
   </div>
 </template>
 
 <script setup lang="ts">
+import { useRoute } from 'vue-router';
 import StarField from './components/StarField.vue';
 import TopBar from './components/TopBar.vue';
+
+// 管理后台使用独立界面，不叠加前台顶栏与星空
+const route = useRoute();
 </script>
 
 <style>

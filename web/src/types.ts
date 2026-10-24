@@ -9,6 +9,7 @@ export interface ArticleBrief {
   updated_at: string;
   author_id: number;
   author_name: string;
+  author_name_color: string | null;
   author_avatar: string | null;
 }
 
@@ -16,5 +17,6 @@ export interface Article extends Omit<ArticleBrief, 'author_id' | 'author_avatar
   content: string;
   author_id: number;
   author_name: string;
+  author_name_color: string | null;
   author_avatar: string | null;
 }

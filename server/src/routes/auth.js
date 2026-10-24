@@ -78,13 +78,21 @@ const codeLimiter = makeLimiter({
 authRouter.post('/send-code', codeLimiter, async (req, res, next) => {
   try {
     const { email } = req.body ?? {};
+    const purpose = req.body?.purpose === 'reset' ? 'reset' : 'login';
     if (!EMAIL_RE.test(String(email ?? ''))) return res.status(400).json({ error: '邮箱格式不正确' });
+    const mail = String(email).toLowerCase();
+    if (purpose === 'reset') {
+      // 找回密码：仅向已注册且未被禁用的邮箱发码，同时不暴露邮箱是否存在以外的信息
+      const [u] = await pool.query('SELECT status FROM users WHERE email = ? LIMIT 1', [mail]);
+      if (u.length === 0) return res.status(404).json({ error: '该邮箱尚未注册' });
+      if (u[0].status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+    }
     const code = randomCode();
     const expires = new Date(Date.now() + 10 * 60 * 1000);
     await pool.query('INSERT INTO email_codes (email, code, purpose, expires_at) VALUES (?, ?, ?, ?)', [
-      String(email).toLowerCase(),
+      mail,
       code,
-      'login',
+      purpose,
       expires,
     ]);
     const viaSmtp = await sendCodeEmail(email, code);
@@ -127,6 +135,44 @@ authRouter.post('/login/code', async (req, res, next) => {
     }
     if (!user.email_verified) await pool.query('UPDATE users SET email_verified = 1 WHERE id = ?', [user.id]);
     res.json({ token: signToken(user), user: publicUser(user) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* ---------- 忘记密码：验证邮箱后重置 ---------- */
+const resetLimiter = makeLimiter({
+  windowMs: 60 * 60 * 1000,
+  max: 10,
+  keyOf: (req) => `${req.ip}:${String(req.body?.email ?? '').toLowerCase()}`,
+  message: '重置密码尝试过于频繁，请稍后再试',
+});
+
+authRouter.post('/reset-password', resetLimiter, async (req, res, next) => {
+  try {
+    const { email, code, password } = req.body ?? {};
+    const mail = String(email ?? '').toLowerCase();
+    if (!EMAIL_RE.test(mail) || !/^\d{6}$/.test(String(code ?? ''))) {
+      return res.status(400).json({ error: '邮箱或验证码格式不正确' });
+    }
+    if (typeof password !== 'string' || password.length < 6) {
+      return res.status(400).json({ error: '密码至少 6 位' });
+    }
+    const [rows] = await pool.query(
+      `SELECT id FROM email_codes
+       WHERE email = ? AND code = ? AND purpose = 'reset' AND used = 0 AND expires_at > NOW()
+       ORDER BY id DESC LIMIT 1`,
+      [mail, code]
+    );
+    if (rows.length === 0) return res.status(401).json({ error: '验证码错误或已过期' });
+    await pool.query('UPDATE email_codes SET used = 1 WHERE id = ?', [rows[0].id]);
+    const [users] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [mail]);
+    const user = users[0];
+    if (!user) return res.status(404).json({ error: '该邮箱尚未注册' });
+    if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+    const hash = await bcrypt.hash(String(password), 10);
+    await pool.query('UPDATE users SET password_hash = ?, email_verified = 1 WHERE id = ?', [hash, user.id]);
+    res.json({ ok: true });
   } catch (e) {
     next(e);
   }
@@ -215,13 +261,19 @@ authRouter.get('/me', authRequired, (req, res) => {
 
 authRouter.put('/profile', authRequired, async (req, res, next) => {
   try {
-    const { name, avatar_url } = req.body ?? {};
+    const { name, bio, avatar_url } = req.body ?? {};
     const patch = {};
     if (name !== undefined) {
       if (typeof name !== 'string' || !name.trim()) {
         return res.status(400).json({ error: '昵称不能为空' });
       }
       patch.name = name.trim().slice(0, 50);
+    }
+    if (bio !== undefined) {
+      if (typeof bio !== 'string' || bio.length > 500) {
+        return res.status(400).json({ error: '简介最长 500 字' });
+      }
+      patch.bio = bio.trim() || null;
     }
     if (typeof avatar_url === 'string') patch.avatar_url = avatar_url.slice(0, 500) || null;
     if (Object.keys(patch).length > 0) {

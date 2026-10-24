@@ -266,3 +266,32 @@
   - 登录表单下方新增提示行：`忘记密码？验证邮箱后即可恢复密码`（`.forgot-tip`，13px 暗色居中，仅登录模式显示）。
 - 说明：后端 `/api/auth/send-code`、`/api/auth/login/code` 接口保留未动（仅前端不再提供验证码登录入口）；忘记密码恢复流程本身尚未实现，页面先展示提示文案。
 - 实测（/login）：按钮仅 登录/注册/登录，表单字段仅 邮箱+密码，提示行渲染 ✓，验证码输入框不存在 ✓；`npm run build` 0 错误。
+
+## 32. 忘记密码恢复流程（用户：先分批提交已有更改，再实现忘记密码的恢复流程）
+
+- 先分 4 批提交了此前 8 项更改：`a13c2d4`（星空+连线光效）、`6aebf79`（子标题）、`3669cd4`（登录页简化）、`b61d09b`（style.txt 删除+文档）。
+- 后端（`server/src/routes/auth.js`、`server/src/db.js`）：
+  - `email_codes.purpose` ENUM 增加 `'reset'`（db.js 建表语句 + 线上库 ALTER）；
+  - `/api/auth/send-code` 支持 `purpose: 'login' | 'reset'`；`reset` 仅向已注册且未禁用的邮箱发码（未注册 404、禁用 403，不泄露更多信息）；
+  - 新增 `POST /api/auth/reset-password`：`{ email, code, password }`，校验 reset 验证码（一次性、10 分钟）后 bcrypt 更新 `password_hash` 并置 `email_verified=1`；每小时每邮箱 10 次限流。后端已重启（PID 39100）。
+- 前端（`web/src/views/LoginView.vue`）：登录模式提示行中「忘记密码？」改为可点链接 → 进入忘记密码面板（注册邮箱 + 验证码 + 发送按钮（60s 倒计时）+ 新密码），提交成功后回登录模式并提示「密码已重置，请使用新密码登录」；忘记密码模式下隐藏登录/注册表单、注册 tab 与 GitHub 区块，提供「返回登录」。
+- 端到端实测（一次性测试账号，完成后已从库中删除）：注册 → UI 点「忘记密码？」→ 发码（开发模式显示验证码）→ 填码+新密码提交 → 回登录显示成功提示；新密码登录 200、旧密码 401、未注册邮箱发码 404。首轮联调发现线上库 `purpose` ENUM 无 `reset` 导致 MySQL truncated 报错，ALTER 后通过。
+- `npm run build` 0 错误。README API 表已补 `reset-password` 与 `purpose` 说明。
+
+## 33. 后台/用户体系分离大改造（用户六点需求）
+
+需求：①后台与用户系统分离，/admin 独立鉴权直进；②后台管理站点信息/Logo/关于页/邮件模板/SMTP/用户/文章（风格独立）；③用户权限后台可配；④用户名颜色后台可改；⑤用户空间 /space/:id（昵称/简介/已发布文章）；⑥登录页去毛玻璃改透明。
+
+**后端**（11 文件改 + 新增 space.js）：
+- db.js：users 加 `name_color VARCHAR(20)`、`bio VARCHAR(500)`、`permissions JSON`（ensureColumn 幂等 ALTER）；settings 种子改 `admin_password_hash`（不再种管理员用户）。
+- middleware/auth.js：adminRequired 改独立 admin JWT（secret=`jwtSecret+':admin'`，payload `{admin:true}`，12h，与用户 JWT 互不相通）。
+- admin.js 全重写：POST /login（10 次/15min 限流）、GET /session、PUT /password、GET/PATCH /users（name_color 正则校验、status、permissions 白名单 `['post']`/null=默认）、GET/PUT /settings（smtp_pass 走 __KEEP__/__CLEAR__ 协议）、POST/DELETE /logo、POST /mail/test、GET /admin/articles（分页+关键词）、PATCH/DELETE /admin/articles/:id（置顶/删除用后台令牌直接操作）。
+- settings.js：DEFAULTS + smtpConfig()（DB 优先 env 回退）/mailTemplate()，publicSiteInfo 加 logoUrl/aboutHtml；mailer.js 用 DB 模板与 SMTP。
+- articles.js：去掉 role=admin 概念（canEdit 仅作者本人、发文需 userCanPost）；auth.js PUT /profile 支持 bio；space.js 新增 GET /api/space/:id。
+- 旧种子管理员用户已降级 role='user'。
+
+**前端**（15 文件改 + 新增 4 文件）：
+- 新增 AdminView.vue（独立「石墨深底+琥珀」风格：登录门 + 站点/邮件/用户/文章四区；用户行内改名色/权限/禁用；文章置顶/删除；改管理密码；登录后补拉用户与文章列表）、SpaceView.vue（资料卡+文章列表+本人编辑昵称/简介）、api/adminHttp.ts、stores/admin.ts。
+- ConsoleView 删用户管理/站点配置区（回归纯用户面板+bio 编辑）；AboutView 改渲染后台 about_html（DOMParser 白名单净化）；TopBar 支持 logoUrl 与彩色用户名+后台入口；ArticleView 作者名彩色并链接 /space/:id；LoginView 去 .glass 改半透明深面板；App.vue 在 /admin 隐藏 StarField/TopBar。
+
+**实测**：admin login/session/未授权 401 ✓；/admin 四区渲染+用户控件+文章 8 行+置顶往返 ✓；/space/1 资料卡+8 文章+编辑昵称/简介保存回显 ✓（测试数据已还原）；文章页作者名 accent 色并链到 /space/1 ✓；/login panel rgba(10,18,28,.55) 无 backdrop ✓；`npm run build` 0 错误。

@@ -5,19 +5,41 @@ export function signToken(user) {
   return jwt.sign({ uid: user.id, role: user.role }, config.jwtSecret, { expiresIn: '7d' });
 }
 
+/** 后台独立令牌（12 小时），与用户 token 分离 */
+export function signAdminToken() {
+  return jwt.sign({ admin: true }, config.jwtSecret + ':admin', { expiresIn: '12h' });
+}
+
 export function publicUser(u) {
   if (!u) return null;
   return {
     id: u.id,
     email: u.email,
     name: u.name,
+    name_color: u.name_color || null,
     avatar_url: u.avatar_url,
+    bio: u.bio || '',
     role: u.role,
     status: u.status,
     github_id: u.github_id,
     email_verified: !!u.email_verified,
     created_at: u.created_at,
   };
+}
+
+/** 权限：permissions 为 NULL 时默认拥有全部基础权限（['post']），否则按配置数组 */
+export function userPermissions(u) {
+  if (!u?.permissions) return ['post'];
+  try {
+    const arr = typeof u.permissions === 'string' ? JSON.parse(u.permissions) : u.permissions;
+    return Array.isArray(arr) ? arr : ['post'];
+  } catch {
+    return ['post'];
+  }
+}
+
+export function userCanPost(u) {
+  return userPermissions(u).includes('post');
 }
 
 export function randomCode() {

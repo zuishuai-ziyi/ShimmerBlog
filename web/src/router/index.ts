@@ -15,6 +15,8 @@ const router = createRouter({
       component: () => import('../views/ConsoleView.vue'),
       meta: { requiresAuth: true },
     },
+    { path: '/admin', name: 'admin', component: () => import('../views/AdminView.vue') },
+    { path: '/space/:id', name: 'space', component: () => import('../views/SpaceView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue') },
   ],
   scrollBehavior(to, from, saved) {

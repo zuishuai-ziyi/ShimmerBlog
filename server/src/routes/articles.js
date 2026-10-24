@@ -3,20 +3,21 @@ import jwt from 'jsonwebtoken';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired, adminRequired } from '../middleware/auth.js';
+import { userCanPost } from '../utils.js';
 import { imageUpload } from '../uploads.js';
 
 export const articlesRouter = Router();
 
 const LIST_FIELDS = `
   a.id, a.title, a.summary, a.status, a.pinned, a.published_at, a.created_at, a.updated_at,
-  u.id AS author_id, u.name AS author_name, u.avatar_url AS author_avatar
+  u.id AS author_id, u.name AS author_name, u.name_color AS author_name_color, u.avatar_url AS author_avatar
 `;
 
 const LIST_JOIN = 'FROM articles a JOIN users u ON a.author_id = u.id';
 
 async function loadArticle(id) {
   const [rows] = await pool.query(
-    `SELECT a.*, u.name AS author_name, u.avatar_url AS author_avatar
+    `SELECT a.*, u.name AS author_name, u.name_color AS author_name_color, u.avatar_url AS author_avatar
      FROM articles a JOIN users u ON a.author_id = u.id WHERE a.id = ? LIMIT 1`,
     [id]
   );
@@ -24,7 +25,7 @@ async function loadArticle(id) {
 }
 
 function canEdit(user, article) {
-  return user && (user.role === 'admin' || user.id === article.author_id);
+  return !!user && user.id === article.author_id;
 }
 
 function validateArticlePayload(body) {
@@ -41,6 +42,7 @@ function validateArticlePayload(body) {
 /* ---------- 创建 ---------- */
 articlesRouter.post('/', authRequired, async (req, res, next) => {
   try {
+    if (!userCanPost(req.user)) return res.status(403).json({ error: '没有写作权限（可在后台申请开通）' });
     const v = validateArticlePayload(req.body);
     if (v.error) return res.status(400).json({ error: v.error });
     const publishedAt = v.status === 'published' ? new Date() : null;
@@ -155,19 +157,13 @@ articlesRouter.get('/:id', async (req, res, next) => {
           uid = null;
         }
       }
-      const isOwnerOrAdmin = uid != null && (uid === article.author_id || (await isAdmin(uid)));
-      if (!isOwnerOrAdmin) return res.status(403).json({ error: '文章未发布' });
+      if (uid == null || uid !== article.author_id) return res.status(403).json({ error: '文章未发布' });
     }
     res.json({ article });
   } catch (e) {
     next(e);
   }
 });
-
-async function isAdmin(uid) {
-  const [rows] = await pool.query("SELECT id FROM users WHERE id = ? AND role = 'admin'", [uid]);
-  return rows.length > 0;
-}
 
 /* ---------- 正文配图上传（登录用户） ---------- */
 articlesRouter.post('/upload-image', authRequired, (req, res) => {

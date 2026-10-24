@@ -11,7 +11,8 @@
 
         <div class="meta">
           <img class="avatar" :src="article.author_avatar || fallbackAvatar" alt="" />
-          <span class="author">{{ article.author_name }}</span>
+          <router-link :to="`/space/${article.author_id}`" class="author"
+            :style="article.author_name_color ? { color: article.author_name_color } : undefined">{{ article.author_name }}</router-link>
           <span class="sep">·</span>
           <time>{{ formatDate(article.published_at || article.created_at) }}</time>
           <span v-if="article.pinned" class="tag">置顶</span>
@@ -54,7 +55,7 @@ const html = computed(() => {
 });
 
 const canEdit = computed(
-  () => !!auth.user && !!article.value && (auth.user.role === 'admin' || auth.user.id === article.value.author_id)
+  () => !!auth.user && !!article.value && auth.user.id === article.value.author_id
 );
 
 async function load(id: string) {
@@ -141,6 +142,14 @@ watch(
 
 .author {
   color: var(--accent);
+}
+
+a.author {
+  text-decoration: none;
+}
+
+a.author:hover {
+  text-decoration: underline;
 }
 
 .tag {

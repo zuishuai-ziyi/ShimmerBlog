@@ -66,6 +66,30 @@ export async function webOrigin() {
   return (await getSetting('web_origin')) || process.env.WEB_ORIGIN || 'http://localhost:5180';
 }
 
+/** SMTP 生效配置：后台设置优先，其次环境变量；均未配置返回 null */
+export async function smtpConfig() {
+  const all = await getAllSettings();
+  const host = all.smtp_host || config.smtp.host;
+  if (!host) return null;
+  return {
+    host,
+    port: Number(all.smtp_port || config.smtp.port || 587),
+    secure: all.smtp_secure === 'true' || all.smtp_secure === '1' || (all.smtp_secure === '' && config.smtp.secure),
+    user: all.smtp_user || config.smtp.user,
+    pass: all.smtp_pass || config.smtp.pass,
+    from: all.smtp_from || config.smtp.from || all.smtp_user || config.smtp.user,
+  };
+}
+
+/** 验证码邮件模板：后台可配置，{code} 占位符 */
+export async function mailTemplate() {
+  const all = await getAllSettings();
+  return {
+    subject: all.mail_code_subject || '验证码',
+    body: all.mail_code_body || '你的验证码是 {code}，10 分钟内有效。',
+  };
+}
+
 /** 对外公开的站点信息（不含密钥） */
 export async function publicSiteInfo() {
   const all = await getAllSettings();
@@ -74,6 +98,8 @@ export async function publicSiteInfo() {
     title: all.site_title,
     subtitle: all.site_subtitle,
     description: all.site_description,
+    logoUrl: all.site_logo_url || '',
+    aboutHtml: all.about_html || '',
     registerOpen: all.register_open === '1',
     githubEnabled: gh.enabled,
   };
