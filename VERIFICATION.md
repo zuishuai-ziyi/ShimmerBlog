@@ -194,3 +194,75 @@
 - `web/src/components/TopBar.vue`：`.nav-link.active` 删除 `font-weight: 600`（三个 font-weight 中仅此一处属于导航选项卡；`.brand-name` 700 与 `.btn-login` 600 非选项卡，保留）。
 - `web/src/styles/tokens.css`：`--fill: rgb(28 128 180)` → `rgb(255 255 255 / 15%)`；`--fill-hover` 同步改为 `rgb(255 255 255 / 25%)`（用户未指定 hover，按同系提亮一档补齐，避免残留实心蓝 hover）。使用方（首页「首页」激活态、ConsoleView 选中 tab/管理员徽标等）无需改动。
 - 实测（Chrome 5180）：激活导航项 bg=`rgba(255,255,255,0.15)`、font-weight=`400`（无加粗）；根变量两值匹配。`npm run build` 0 错误。README 已同步。
+
+## 21. 星空微调：最大星点变小 + 数量增加（用户要求：星星最大大小略微调小、数量增加）
+
+- `web/src/components/StarField.vue`：`r` 由 `0.4 + random*1.8`（0.4–2.2px）改为 `0.4 + random*1.5`（0.4–1.9px），最大星点缩小约 14%；数量公式由 `max(90, w*h/8500)` 改为 `max(120, w*h/6500)`（1444×828 视口 141 → 184 颗，约 +30%）。速度/透明度/闪烁逻辑不变。
+- 实测（Chrome 5180）：截图确认星空更密且无过大星点，画面依旧安静；`npm run build` 0 错误。README 已同步。
+
+## 22. 星空数量增至约 500 颗（用户要求：当前视口下增加至约 500 颗）
+
+- `web/src/components/StarField.vue`：数量公式 `max(120, w*h/6500)` → `max(120, w*h/2400)`；1444×828 视口 = 498 颗。星点大小/速度/透明度不变。
+- 实测（Chrome 5180）：截图确认星空繁密但依旧安静、不干扰正文；`npm run build` 0 错误。README 已同步。
+
+## 23. 时间轴连线：转折更平滑 + 去圆点 + 自下而上脉冲（用户要求：转折处更平滑、去除圆点、连线透明度不变且较高、加自下而上脉冲动画）
+
+- `web/src/components/TimelineList.vue`：① `smoothPath` 的 Catmull-Rom 张力系数 1/6 → 1/4（控制点外扩，转折更圆滑）；② 删除两端 `<circle class="node">` 圆点及其样式；③ 每条连线叠加同 `d` 的 `.pulse` 亮脉冲路径（`pathLength="100"`、`stroke-dasharray: 7 93`、`#e8f6fd`、opacity 0.9），`@keyframes pulse-move` 让 `stroke-dashoffset` 0 → 100 递增——dashoffset 增大 = 图案朝路径起点移动 = 自下而上；每条时长 `dur/3`（约 1.5–3.8s）、延迟沿用各线随机 delay，节奏不同步。底线 `.curve` 与呼吸变色动画未动（透明度保持原状）。
+- 实测（Chrome 5180）：`circle` 数 = 0，pulse/curve 各 7 条；`animationName = pulse-move`、dasharray `7px, 93px`；400ms 间隔采样 dashoffset 59.06 → 85.95（递增 = 向上）；截图确认转折圆润、脉冲可见。`npm run build` 0 错误。README 已同步。
+
+## 24. 连线透明化 + 脉冲恒速慢速（用户 5 点要求：去透明度变化动画 / 连线几乎不可见 / 脉冲速度恒定不受线长影响 / 速度调慢似旧闪烁 / 脉冲淡色且透明度略高于连线）
+
+- `web/src/components/TimelineList.vue`：
+  - 删除 `curve-tint` 呼吸动画（stroke 与 opacity 同变的 keyframes 整体移除），`.curve` 固定 `opacity: 0.18`（近乎不可见、恒定）；`Curve` 类型去掉 `cb`/`dur`。
+  - `.pulse` 改淡色 `#cfe9f8`、`opacity: 0.38`（略高于连线的 0.18）；去掉 `pathLength=100` 归一化，改为逐条实测：`measure()` 里用 detached `<path>` 的 `getTotalLength()` 取几何长度 `len`，内联 `stroke-dasharray: 8 ${len}` 与 `--plen`，keyframes `to { stroke-dashoffset: var(--plen) }`（递增 = 自下而上不变）。
+  - **恒速**：`PULSE_SPEED = 40` px/s，`pdur = len / 40`——时长随线长伸缩、速度恒定；典型 240–320px 线走完 6–8s，节奏贴近此前 curve-tint 的 4.5–11.5s 闪烁带。随机 delay 沿用。
+- 实测（Chrome 5180）：`curveOpacity = 0.18`、`curveAnim = none`；脉冲 `#cfe9f8`/0.38/`pulse-move` 运行中；WAAPI 读时钟 progress 0.5949 → 0.7386 持续推进；7 条脉冲速度全部 = 40.0 px/s；截图确认连线几乎隐形、脉冲淡亮可辨。`npm run build` 0 错误。README 已同步。
+- 备注：页面在后台标签页时 `getComputedStyle().strokeDashoffset` 采样会被渲染节流冻结，动画推进要用 `element.getAnimations()[0].currentTime / progress` 验证。
+
+## 25. 脉冲加长（用户：脉冲长度应很长）
+
+- `web/src/components/TimelineList.vue`：脉冲亮段由固定 8px 改为 `dash = max(140, len * 0.45)`（约线长一半、短线下限 140px），`strokeDasharray: ${dash} ${len - dash}`（dash+gap = len，循环无缝）；`Curve` 类型加 `dash: number`。速度 40px/s、方向、颜色、透明度均不变。
+- 实测：首条线 `stroke-dasharray: 140, 142.6`（len 282.6，覆盖 ~50%）；截图确认长光段沿整条 S 曲线延展、连线其余部分仍近乎隐形；`npm run build` 0 错误。README 已同步。
+
+## 26. 脉冲白色 + 回第一版速度 + 单光效（用户：光效白色 / 速度改回第一版但仍不受线长影响 / 同一连线不出现两处光效）
+
+- `web/src/components/TimelineList.vue`：
+  - `.pulse` 颜色 `#cfe9f8` → `#ffffff`。
+  - `PULSE_SPEED` 40 → **110 px/s**：第一版脉冲时长为 `dur/3`（dur ∈ 4.5–11.5s，即全程 1.5–3.8s、典型线约 90–120px/s），取中值 110 作为恒速——典型 283px 线 2.6s 走完，贴近第一版节奏；所有线严格 110px/s，与线长无关。
+  - 亮段 `max(140, len*0.45)` → 纯 `len*0.45`（去掉 140px 下限）：旧下限使短线 dash > gap（239px 线 140/99），同一周期出现两段光；纯比例后 dash 恒 < gap，同一条线上最多一处光效。
+- 实测：7 条线 color 全部 `rgb(255,255,255)`、speed 全部 110px/s、dash<gap 全部成立（如 127.2/155.4）；截图每条线仅一段白光；`npm run build` 0 错误。README 已同步。
+
+## 27. 单光效修正：考虑亮段自身长度（用户：单光效实现不正确，没有考虑光效本身长度）
+
+- 问题根因：第 26 轮 `stroke-dasharray: ${dash} ${len - dash}` 使图案周期 = 线长。dashoffset 动画把图案沿闭合周期位移一个线长时，长亮段必然在绕环边界处首尾同时可见——线两端各出现一段光（约半个周期时间都是双光）。
+- 修正（`web/src/components/TimelineList.vue`）：间隔段改为整条线长 `stroke-dasharray: ${dash} ${len}`，图案周期 T = len + dash > len；keyframes 终值改为 `var(--tlen)`（= T，位移一个完整周期保持无缝）；`pdur = T / 110`（图案速度仍精确 110px/s，亮段在线上可见行进仍为 len/110，周期含亮段自身行程故略长）。
+- 验证：刷新后 7 条线全部 `gap == len`、`patternSpeed = 110px/s`；**对每条线扫 400 个相位，任一时刻路径上可见亮段数最大值 = 1**（k∈{-1,0,1} 三个图案实例与 [0,len) 求交），数学上排除双光；截图确认每线仅一段白光。`npm run build` 0 错误。README 已同步。
+- 几何结论：dash 循环要严格单实例，充要条件是周期 ≥ 线长 + 亮段长（间隔段 ≥ 线长）；仅 dash < gap（周期 = 线长）不够。
+
+## 28. 光效提速 + 循环间停顿（用户：光效速度增加；光效结束后等待一会儿再重新出现）
+
+- `web/src/components/TimelineList.vue`：`PULSE_SPEED` 110 → **160px/s**（所有线恒定不变）；新增 `PAUSE_SECONDS = 1.2`——图案周期改为 `T = 线长×1.45 + 停顿行程（1.2s × 160px/s = 192px）`，`pdur = T / 160`，`strokeDasharray` 间隔段 = `T − dash`，keyframes 位移仍 = `var(--tlen)`（无缝）。
+- 效果：光效以 160px/s 走完线（典型 405px 线约 2.5s）后，线上空窗 **1.2s**，再从底部重新出现；周期 ≥ 线长 + 亮段的单光效条件仍满足。
+- 验证：刷新后 7 条线 `patternSpeed = 160`、`darkSpan = 192px`（= 1.2s）、400 相位扫描亮段数 max = 1；`npm run build` 0 错误。README 已同步。
+
+## 29. 子标题改为「追光的人，终会光芒万丈。」（用户要求）
+
+- 改了三处（子标题链路：DB → 后端默认 → 前端默认）：
+  - `server/src/services/settings.js` DEFAULTS.site_subtitle 更新（新库/新环境的默认值）；
+  - MySQL `settings` 表 `site_subtitle` 行 UPDATE（运行时真源，原值为旧文案，覆盖代码默认）；
+  - `web/src/stores/site.ts` 默认 info.subtitle 更新（后端不可用时的兜底文案）。
+- 后端以 `node src/index.js` 直跑（端口 3010，settings 有进程内缓存，仅 DB 更新不生效）→ 重启后端进程后缓存重载；顺带清理了两个残留的旧 `node dist/index.js` 后端进程（19580/21956，未监听 3010 的僵尸实例），现由单一新进程（PID 10888）服务。
+- 实测：`GET /api/site` 返回新 subtitle；首页渲染「追光的人，终会光芒万丈。」✓。README 未提及旧子标题，无需改。
+
+## 30. 子标题去句号（用户：不要留下句号）
+
+- 三处链路同步去掉尾部「。」：MySQL `settings` 表 `site_subtitle` 行、`server/src/services/settings.js` DEFAULTS、`web/src/stores/site.ts` 默认值，均为「追光的人，终会光芒万丈」。
+- settings 进程内缓存 → 后端重启（新 PID 40416）。实测 `GET /api/site` 与首页渲染均为无句号文案；`npm run build` 0 错误。
+
+## 31. 登录页仅保留密码登录 + 忘记密码提示（用户要求）
+
+- `web/src/views/LoginView.vue`：
+  - 删除登录方式切换（`.sub-tabs` 密码登录/验证码登录）与验证码表单块（验证码输入、发送按钮、开发模式验证码提示），删除 `way`/`sendCode`/`devCode`/倒计时相关全部脚本与样式；密码字段 v-if 去掉（登录/注册均恒显示）。
+  - 登录表单下方新增提示行：`忘记密码？验证邮箱后即可恢复密码`（`.forgot-tip`，13px 暗色居中，仅登录模式显示）。
+- 说明：后端 `/api/auth/send-code`、`/api/auth/login/code` 接口保留未动（仅前端不再提供验证码登录入口）；忘记密码恢复流程本身尚未实现，页面先展示提示文案。
+- 实测（/login）：按钮仅 登录/注册/登录，表单字段仅 邮箱+密码，提示行渲染 ✓，验证码输入框不存在 ✓；`npm run build` 0 错误。
