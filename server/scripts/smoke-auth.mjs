@@ -89,5 +89,8 @@ r = await fetch(`${B}/profile`, {
 body = await r.json().catch(() => ({}));
 ok('profile update', r.status === 200 && body.user?.name === '改名后的用户');
 
+// 清理本脚本创建的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
+await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail]]);
+
 console.log(`\n== ${pass} pass, ${fail} fail ==`);
 process.exit(fail ? 1 : 0);

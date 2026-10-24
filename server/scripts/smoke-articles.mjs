@@ -23,7 +23,7 @@ const tB = await register('writerB');
 ok('register A+B', !!tA && !!tB);
 const rAdmin = await fetch(`${BASE}/admin/login`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ password: 'shimmer-admin' }),
+  body: JSON.stringify({ password: process.env.SB_ADMIN_PASSWORD || '123456' }),
 });
 const tAdmin = (await j(rAdmin)).token;
 ok('admin login', !!tAdmin);
@@ -100,6 +100,15 @@ r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: 
 ok('admin pin numeric 1', r.status === 200 && (await j(r)).pinned === 1);
 r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tAdmin}` }, body: JSON.stringify({ pinned: 0 }) });
 ok('admin unpin numeric 0', r.status === 200 && (await j(r)).pinned === 0);
+
+// 清理测试用户（文章随外键级联删除；不留终态数据，否则每次回归都新建同名用户）
+for (const t of [tA, tB]) {
+  const me = await fetch(`${BASE}/auth/me`, { headers: auth(t) }).then(j);
+  if (me?.user?.id) {
+    const del = await fetch(`${BASE}/admin/users/${me.user.id}`, { method: 'DELETE', headers: auth(tAdmin) });
+    ok(del.status === 200, `cleanup ${me.user.name}`);
+  }
+}
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

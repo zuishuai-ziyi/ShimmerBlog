@@ -18,7 +18,7 @@ const j = async (method, path, body, token) => {
 };
 
 console.log('== 1) 后台登录 ==');
-const login = await j('POST', '/api/admin/login', { password: 'shimmer-admin' });
+const login = await j('POST', '/api/admin/login', { password: process.env.SB_ADMIN_PASSWORD || '123456' });
 ok(login.status === 200 && login.data.token, 'admin login', `status=${login.status}`);
 const tk = login.data.token;
 
@@ -34,6 +34,9 @@ ok(kinds.test?.subjectKey === 'mail_test_subject' && kinds.welcome?.bodyKey === 
 ok(!!kinds.welcome?.defaultSubject && !!kinds.test?.defaultBody, '内置默认值已下发');
 
 console.log('== 3) PUT 自定义 欢迎邮件 + 测试邮件 模板 ==');
+// 备份测试前模板原值（含验证码模板），测完还原——此前每跑一次本脚本都会把用户自定义模板置空（丢失事故根因）。
+const TPL_KEYS = ['mail_code_subject', 'mail_code_body', 'mail_welcome_subject', 'mail_welcome_body', 'mail_test_subject', 'mail_test_body'];
+const tplBackup = Object.fromEntries(TPL_KEYS.map((k) => [k, s1.data.settings[k] ?? '']));
 const put1 = await j('PUT', '/api/admin/settings', {
   mail_welcome_subject: '欢迎加入 {site}！',
   mail_welcome_body: '嗨 {name}，这是自定义欢迎语。',
@@ -75,13 +78,26 @@ const email = `e2e-welcome-${Date.now()}@test.local`;
 const reg = await j('POST', '/api/auth/register', { email, password: 'test123456', name: '欢迎邮件测试' });
 ok(reg.status === 201 && reg.data.user?.name === '欢迎邮件测试', 'register 201', `status=${reg.status}`);
 
-console.log('== 8) 恢复默认（置空） ==');
+console.log('== 8) 置空回退默认，再还原运行前原值 ==');
 const put2 = await j('PUT', '/api/admin/settings', {
   mail_welcome_subject: '', mail_welcome_body: '', mail_test_subject: '', mail_test_body: '',
 }, tk);
-ok(put2.status === 200, '恢复默认 200');
+ok(put2.status === 200, '置空 200');
 const s3 = await j('GET', '/api/admin/settings', undefined, tk);
 ok(s3.data.settings.mail_welcome_subject === '' && s3.data.settings.mail_test_body === '', '已回空值（回退内置默认）');
+
+// 还原为测试前的原值：不再把用户自定义模板留在空态。
+const put3 = await j('PUT', '/api/admin/settings', tplBackup, tk);
+ok(put3.status === 200, '还原原值 200');
+const s4 = await j('GET', '/api/admin/settings', undefined, tk);
+ok(TPL_KEYS.every((k) => (s4.data.settings[k] ?? '') === tplBackup[k]), '模板键已还原为测试前原值',
+  JSON.stringify(Object.fromEntries(TPL_KEYS.map((k) => [k, s4.data.settings[k] ?? '']))));
+
+// 清理本脚本注册的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
+if (reg.data?.user?.id) {
+  const del = await j('DELETE', `/api/admin/users/${reg.data.user.id}`, undefined, tk);
+  ok(del.status === 200, '清理 e2e 测试用户', `status=${del.status}`);
+}
 
 console.log(`\n结果: ${pass} passed / ${fail} failed`);
 process.exit(fail ? 1 : 0);
