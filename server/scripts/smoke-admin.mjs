@@ -2,6 +2,8 @@
  * task-6 冒烟：站点公开配置 / 后台用户管理 / 后台站点配置 / 个人资料
  * 用法：node scripts/smoke-admin.mjs
  */
+import { registerUser } from './_test-lib.mjs';
+
 const BASE = process.env.SB_BASE || 'http://127.0.0.1:3010/api';
 
 let pass = 0;
@@ -50,7 +52,7 @@ async function main() {
 
   // 普通用户
   const email = `smoke${rnd()}@test.local`;
-  const reg = await req('POST', '/auth/register', { body: { email, password: 'secret123', name: '冒烟用户' } });
+  const reg = await registerUser(BASE, { email, password: 'secret123', name: '冒烟用户' });
   check('新建普通用户 201', reg.status === 201, JSON.stringify(reg.data));
   const userToken = reg.data?.token;
   const userId = reg.data?.user?.id;
@@ -101,7 +103,7 @@ async function main() {
   const newMail = `moved${rnd()}@test.local`;
   const chMail = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { email: newMail } });
   check('改邮箱 200 且重置验证态', chMail.status === 200 && chMail.data?.user?.email === newMail && chMail.data?.user?.email_verified === 0, JSON.stringify(chMail.data));
-  const dupMail = await req('POST', '/auth/register', { body: { email: `other${rnd()}@test.local`, password: 'secret123', name: '占用邮箱' } });
+  const dupMail = await registerUser(BASE, { email: `other${rnd()}@test.local`, password: 'secret123', name: '占用邮箱' });
   const dupId = dupMail.data?.user?.id;
   const dupRes = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { email: dupMail.data?.user?.email } });
   check('改到已占用邮箱 409', dupRes.status === 409, String(dupRes.status));
@@ -124,7 +126,7 @@ async function main() {
   check('删除后空间 404', tSpace.status === 404, String(tSpace.status));
   const gone = await req('POST', '/auth/login', { body: { email: dupMail.data?.user?.email, password: 'secret123' } });
   check('已删用户登录 401', gone.status === 401, String(gone.status));
-  const reReg = await req('POST', '/auth/register', { body: { email: dupMail.data?.user?.email, password: 'secret123', name: '邮箱释放回归' } });
+  const reReg = await registerUser(BASE, { email: dupMail.data?.user?.email, password: 'secret123', name: '邮箱释放回归' });
   check('释放后的邮箱可重新注册 201', reReg.status === 201, String(reReg.status));
   const freedId = reReg.data?.user?.id;
 
@@ -180,7 +182,7 @@ async function main() {
   const site3 = await req('GET', '/site');
   check('/site registerOpen=false', site3.data?.registerOpen === false);
   await req('PUT', '/admin/settings', { token: adminToken, body: { register_open: true } });
-  const reopened = await req('POST', '/auth/register', { body: { email: `y${rnd()}@test.local`, password: 'secret123' } });
+  const reopened = await registerUser(BASE, { email: `y${rnd()}@test.local`, password: 'secret123' });
   check('重新开放注册后注册 201', reopened.status === 201, String(reopened.status));
 
   // 还原标题

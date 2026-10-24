@@ -16,17 +16,18 @@
       </div>
       <TimelineList v-else :articles="articles" />
 
-      <div v-if="articles.length < total" class="more">
-        <button class="btn" :disabled="loading" @click="loadMore">
-          {{ loading ? '加载中…' : '加载更多' }}
-        </button>
+      <!-- 滚动哨兵：进入视口（提前 400px）即自动加载下一页 -->
+      <div v-if="articles.length" ref="sentinel" class="sentinel">
+        <span v-if="loading" class="sentinel-text loading"><i class="spinner" />正在加载…</span>
+        <span v-else-if="moreError" class="sentinel-text failed">加载失败，点击<button type="button" class="inline-link" @click="loadMore">此处</button>重试</span>
+        <span v-else-if="hasMore" class="sentinel-text idle">继续上滑加载更多</span>
       </div>
     </main>
   </div>
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref } from 'vue';
 import http, { errMsg } from '../api/http';
 import TimelineList from '../components/TimelineList.vue';
 import { useAuthStore } from '../stores/auth';
@@ -44,33 +45,60 @@ const heroParts = computed<[string, string] | null>(() =>
 );
 const articles = ref<ArticleBrief[]>([]);
 const total = ref(0);
-const page = ref(1);
+const page = ref(0); // 已成功加载的页码
 const pageSize = 8;
 const loading = ref(false);
-const error = ref('');
+const error = ref(''); // 首屏错误（整页占位）
+const moreError = ref(''); // 加载后续页失败（列表保留，可重试）
+const sentinel = ref<HTMLElement | null>(null);
+let observer: IntersectionObserver | null = null;
+
+const hasMore = computed(() => articles.value.length < total.value);
 
 async function fetchPage(p: number) {
+  if (loading.value) return;
   loading.value = true;
-  error.value = '';
   try {
     const { data } = await http.get<{ items: ArticleBrief[]; total: number }>('/articles', {
       params: { page: p, pageSize },
     });
     articles.value = p === 1 ? data.items : [...articles.value, ...data.items];
     total.value = data.total;
+    page.value = p;
+    error.value = '';
+    moreError.value = '';
   } catch (e) {
-    error.value = errMsg(e);
+    // 首屏失败显示整页占位；后续页失败只提示、不清空已有列表（且不推进页码）
+    if (p === 1) error.value = errMsg(e);
+    else moreError.value = errMsg(e);
   } finally {
     loading.value = false;
   }
 }
 
 function loadMore() {
-  page.value += 1;
-  fetchPage(page.value);
+  if (loading.value || !hasMore.value) return;
+  fetchPage(page.value + 1);
 }
 
-onMounted(() => fetchPage(1));
+onMounted(async () => {
+  await fetchPage(1);
+  // 等首屏列表渲染完，哨兵元素已存在后再挂观察器
+  await nextTick();
+  // 滚动到底部附近自动续页；rootMargin 提前 400px 预加载，滚动不等待
+  observer = new IntersectionObserver(
+    (entries) => {
+      if (entries.some((en) => en.isIntersecting)) loadMore();
+    },
+    { rootMargin: '400px 0px' },
+  );
+  if (sentinel.value) observer.observe(sentinel.value);
+});
+
+onBeforeUnmount(() => {
+  observer?.disconnect();
+  observer = null;
+});
 </script>
 
 <style scoped>
@@ -121,9 +149,65 @@ onMounted(() => fetchPage(1));
   color: #ff9b9b;
 }
 
-.more {
+.sentinel {
   display: flex;
   justify-content: center;
-  margin-top: 54px;
+  padding: 40px 0 10px;
+  min-height: 1px;
 }
+
+.sentinel-text {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13.5px;
+  color: var(--text-dim);
+}
+
+.sentinel-text.loading {
+  color: var(--accent);
+}
+
+.sentinel-text.idle {
+  color: rgba(205, 226, 238, 0.32);
+}
+
+.spinner {
+  width: 13px;
+  height: 13px;
+  border: 2px solid rgba(140, 198, 226, 0.25);
+  border-top-color: var(--accent);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.sentinel-text.failed {
+  /* 不要 Inline-Flex 的 gap：否则「加载失败，点击」「此处」「重试」之间被拉开 8px */
+  display: inline-block;
+  color: rgba(255, 155, 155, 0.7);
+}
+
+/* 仅「此处」可点击，文字样式与整句一致 */
+.inline-link {
+  padding: 0;
+  border: none;
+  background: none;
+  font: inherit;
+  color: #ff9b9b;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  cursor: pointer;
+  transition: color 0.2s;
+}
+
+.inline-link:hover {
+  color: #ffd0d0;
+}
+
 </style>

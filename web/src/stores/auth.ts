@@ -47,5 +47,9 @@ export const useAuthStore = defineStore('auth', {
       this.user = null;
       localStorage.removeItem('sb_token');
     },
+    /** 退出登录：JWT 无服务端会话，清掉本地凭证即可；跳转由调用方决定 */
+    logout() {
+      this.clear();
+    },
   },
 });

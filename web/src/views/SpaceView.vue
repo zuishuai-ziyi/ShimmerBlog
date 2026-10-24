@@ -14,7 +14,7 @@
         <h1 class="u-name" :style="user?.name_color ? { color: user.name_color } : undefined">
           {{ user?.name || '…' }}
         </h1>
-        <p class="u-bio">{{ user?.bio || '这个人还没有写简介。' }}</p>
+        <p class="u-bio">{{ user?.bio || '这个人很懒，没有留下简介' }}</p>
         <p class="u-meta">加入于 {{ fmtDate(user?.created_at) }} · {{ total }} 篇文章</p>
       </div>
       <button v-if="isSelf" class="edit-btn" @click="openEdit">编辑资料</button>

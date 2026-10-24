@@ -1,8 +1,11 @@
 <template>
   <StarField v-if="route.name !== 'admin'" />
   <TopBar v-if="route.name !== 'admin'" />
-  <div class="app-shell">
-    <router-view />
+  <div class="app-root">
+    <div class="app-shell">
+      <router-view />
+    </div>
+    <SiteFooter v-if="route.name !== 'admin'" />
   </div>
 </template>
 
@@ -10,6 +13,7 @@
 import { useRoute } from 'vue-router';
 import StarField from './components/StarField.vue';
 import TopBar from './components/TopBar.vue';
+import SiteFooter from './components/SiteFooter.vue';
 
 // 管理后台使用独立界面，不叠加前台顶栏与星空
 const route = useRoute();
@@ -30,9 +34,16 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+.app-root {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
 .app-shell {
   position: relative;
   z-index: 1;
+  flex: 1 0 auto;
 }
 
 /* 页面通用容器 */
@@ -108,12 +119,12 @@ button {
   background: var(--fill);
   border: none;
   border-radius: 999px;
-  transition: filter 0.2s, transform 0.15s;
+  transition: background 0.2s, filter 0.2s;
 }
 
+/* 悬停只变底色，不做上浮位移 */
 .btn:hover:not(:disabled) {
   background: var(--fill-hover);
-  transform: translateY(-1px);
 }
 
 .btn:disabled {
@@ -142,6 +153,7 @@ button {
   background: rgba(220, 60, 60, 0.18);
   border: 1px solid rgba(255, 120, 120, 0.4);
   border-radius: 999px;
+  transition: background 0.2s, border-color 0.2s, color 0.2s;
 }
 
 .btn-danger:hover {

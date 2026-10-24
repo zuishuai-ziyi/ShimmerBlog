@@ -1,4 +1,6 @@
 /* E2E：邮件模板全量自定义（第 36 轮） */
+import { registerUser } from './_test-lib.mjs';
+
 const BASE = 'http://127.0.0.1:3010';
 let pass = 0, fail = 0;
 const ok = (cond, name, extra = '') => {
@@ -75,7 +77,9 @@ console.log('== 6) SMTP 未配置时 测试邮件 友好报错 ==');
 
 console.log('== 7) 新用户注册（触发欢迎邮件路径，不阻塞注册） ==');
 const email = `e2e-welcome-${Date.now()}@test.local`;
-const reg = await j('POST', '/api/auth/register', { email, password: 'test123456', name: '欢迎邮件测试' });
+// 注册需邮箱验证（第 45 轮）：先取注册验证码再带码注册
+const regRes = await registerUser(`${BASE}/api`, { email, password: 'test123456', name: '欢迎邮件测试' });
+const reg = { status: regRes.status, data: regRes.data };
 ok(reg.status === 201 && reg.data.user?.name === '欢迎邮件测试', 'register 201', `status=${reg.status}`);
 
 console.log('== 8) 置空回退默认，再还原运行前原值 ==');

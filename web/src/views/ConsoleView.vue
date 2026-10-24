@@ -82,6 +82,7 @@
         <p v-if="profileError" class="error-tip">{{ profileError }}</p>
         <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
         <div class="form-actions">
+          <button class="btn-ghost logout" type="button" @click="doLogout">退出登录</button>
           <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
         </div>
       </form>
@@ -91,7 +92,7 @@
 
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
-import { useRoute } from 'vue-router';
+import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
@@ -112,6 +113,13 @@ const tab = ref<'articles' | 'profile'>('articles');
 
 const auth = useAuthStore();
 const route = useRoute();
+const router = useRouter();
+
+/** 退出登录：清凭证回首页 */
+function doLogout() {
+  auth.logout();
+  router.push('/');
+}
 
 /* ---------- 我的文章 ---------- */
 const mine = ref<ArticleBrief[]>([]);
@@ -258,18 +266,25 @@ onMounted(async () => {
 .tabs button.on {
   color: #ffffff;
   background: var(--fill);
-  font-weight: 700;
+}
+
+/* 悬停态与顶栏「首页 / 关于」一致 */
+.tabs button:hover:not(.on) {
+  color: var(--text);
+  background: rgba(140, 198, 226, 0.12);
 }
 
 .spacer {
   flex: 1;
 }
 
+/* 小字返回链接：只做文字色过渡，不加悬停底色 */
 .back {
   font-size: 13px;
   color: var(--text-dim);
   text-decoration: none;
   padding-right: 6px;
+  transition: color 0.25s ease;
 }
 
 .back:hover {
@@ -314,6 +329,9 @@ onMounted(async () => {
   min-width: 0;
   flex: 1 1 200px;
   overflow: hidden;
+  /* 给状态圆点左侧光晕留出裁剪余量（padding 反向 offset，内容位置不变） */
+  padding-left: 10px;
+  margin-left: -10px;
 }
 
 .row-title {
@@ -329,6 +347,7 @@ onMounted(async () => {
   color: inherit;
   text-decoration: none;
   overflow-wrap: anywhere;
+  transition: color 0.25s ease;
 }
 
 .row-title a:hover {
@@ -400,6 +419,7 @@ onMounted(async () => {
   border: none;
   cursor: pointer;
   padding: 0;
+  transition: color 0.2s, opacity 0.2s;
 }
 
 .link-btn:hover {
@@ -451,7 +471,22 @@ onMounted(async () => {
 
 .form-actions {
   display: flex;
+  align-items: center;
   justify-content: flex-end;
+  gap: 12px;
+}
+
+/* 退出登录放在左侧，与右侧「保存资料」区分主次；悬停变红 */
+.form-actions .logout {
+  margin-right: auto;
+  /* 全局 .btn-ghost 只过渡 background，这里补上文字色与边框色的过渡 */
+  transition: color 0.25s ease, background 0.25s ease, border-color 0.25s ease;
+}
+
+.form-actions .logout:hover {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.14);
+  border-color: rgba(255, 138, 138, 0.42);
 }
 
 .profile-row {
@@ -464,6 +499,7 @@ onMounted(async () => {
   font-size: 13px;
   color: var(--accent);
   text-decoration: none;
+  transition: color 0.25s ease;
 }
 
 .space-link:hover {
@@ -473,10 +509,19 @@ onMounted(async () => {
 .upload-chip {
   font-size: 13px;
   color: var(--accent);
+  background: transparent;
   border: 1px dashed var(--glass-border);
   border-radius: 999px;
   padding: 7px 16px;
   cursor: pointer;
+  transition: color 0.25s ease, background 0.25s ease, border-color 0.25s ease;
+}
+
+/* 与站内其他胶囊按钮一致的悬停反馈（无位移，只变色） */
+.upload-chip:hover {
+  color: var(--text);
+  background: rgba(140, 198, 226, 0.14);
+  border-color: rgba(140, 198, 226, 0.55);
 }
 
 .notice {

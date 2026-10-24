@@ -5,6 +5,28 @@
     <link rel="icon" type="image/png" href="/logo.png" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>微光博客</title>
+    <!-- 首屏底色：在 JS/样式包加载前就定好页面底色，避免白闪 / 黑闪。
+         /admin 是白蓝后台 → 浅底；其余为星空深色页面 → 纯黑底。 -->
+    <script>
+      (function () {
+        if (location.pathname === '/admin' || location.pathname.indexOf('/admin/') === 0) {
+          document.documentElement.classList.add('admin-route');
+        }
+      })();
+    </script>
+    <style>
+      html {
+        background: #000;
+      }
+      body {
+        margin: 0;
+        background: #000;
+      }
+      html.admin-route,
+      html.admin-route body {
+        background: #f4f7fc;
+      }
+    </style>
   </head>
   <body>
     <div id="app"></div>

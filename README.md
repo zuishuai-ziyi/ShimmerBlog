@@ -31,7 +31,7 @@ ShimmerBlog/
 │   └── uploads/            # 运行期上传文件（不提交）
 ├── web/                    # Vue SPA（dev 5180）
 │   └── src/
-│       ├── components/     # StarField / TopBar / TimelineList / ArticleCard / ArticleEditor
+│       ├── components/     # StarField / TopBar / SiteFooter / TimelineList / ArticleCard / ArticleEditor
 │       ├── views/          # Home / Article / About / Login / AuthCallback / Console
 │       ├── stores/         # auth（登录态）· site（站点配置）
 │       ├── styles/tokens.css  # 9 色板 + 玻璃变量
@@ -87,6 +87,7 @@ cd ../web && npm run dev
 - **GitHub OAuth**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，
   Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`），把 Client ID / Secret 填进站点配置即可。
 - **邮件（验证码 / 欢迎 / 测试）**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
+- **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
 - **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
 - **发件人格式**：必须包含邮箱地址，推荐 `名称 <you@domain.com>`；只填名称会被自动包装成 `"名称" <SMTP 账号>`（否则 nodemailer 拿不到地址，信封 Return-Path 为空、无 From 头，外域邮箱会拒收或进垃圾桶，且退信也发不回来）。
 
@@ -96,9 +97,9 @@ cd ../web && npm run dev
 | --- | --- |
 | `GET /api/health` | 健康检查（含数据库连通性） |
 | `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 是否可用/关于页副标题 aboutSubtitle） |
-| `POST /api/auth/register` | 邮箱 + 密码注册 |
+| `POST /api/auth/register` | 邮箱 + 密码 + **邮箱验证码**注册（验证码校验通过即视为邮箱已验证） |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
-| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `reset`，`reset` 仅向已注册邮箱发送） |
+| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送） |
 | `POST /api/auth/login/code` | 验证码登录（邮箱不存在则自动注册） |
 | `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
@@ -126,7 +127,7 @@ cd ../web && npm run dev
 
 ```bash
 cd server
-node scripts/smoke-auth.mjs       # 13 项：注册/登录/验证码/OAuth 占位/头像/改名
+node scripts/smoke-auth.mjs       # 17 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 48 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）

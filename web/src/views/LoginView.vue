@@ -30,11 +30,30 @@
           <input v-model.trim="form.name" type="text" placeholder="留空则用邮箱前缀" maxlength="50" />
         </div>
 
+        <div v-if="mode === 'register'" class="field">
+          <label>邮箱验证码</label>
+          <div class="code-row">
+            <input
+              v-model.trim="form.code"
+              type="text"
+              inputmode="numeric"
+              maxlength="6"
+              placeholder="6 位数字"
+              autocomplete="one-time-code"
+              required
+            />
+            <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
+              {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
+            </button>
+          </div>
+          <p class="hint-tip">注册需先验证邮箱：点击发送验证码，10 分钟内有效</p>
+        </div>
+
         <p v-if="error" class="error-tip">{{ error }}</p>
         <p v-if="notice" class="notice">{{ notice }}</p>
 
         <button class="btn submit" type="submit" :disabled="loading">
-          {{ loading ? '处理中…' : mode === 'register' ? '注册并登录' : '登录' }}
+          {{ loading ? '处理中…' : mode === 'register' ? '验证并注册' : '登录' }}
         </button>
 
         <p v-if="mode === 'login'" class="forgot-tip">
@@ -131,7 +150,7 @@ function switchMode(m: 'login' | 'register' | 'forgot') {
   notice.value = '';
   devCode.value = '';
   if (m === 'login') form.password = '';
-  if (m === 'forgot') form.code = '';
+  if (m === 'forgot' || m === 'register') form.code = '';
 }
 
 async function submit() {
@@ -145,6 +164,7 @@ async function submit() {
         email: form.email,
         password: form.password,
         name: form.name || undefined,
+        code: form.code,
       });
       await auth.setToken(data.token);
       router.replace(redirect.value);
@@ -160,17 +180,18 @@ async function submit() {
   }
 }
 
-/** 发送邮箱验证码（忘记密码重置用） */
+/** 发送邮箱验证码：注册用 register，忘记密码用 reset */
 async function sendCode() {
   if (!form.email) {
-    error.value = '请先填写注册邮箱';
+    error.value = '请先填写邮箱';
     return;
   }
   sending.value = true;
   error.value = '';
   notice.value = '';
   try {
-    const { data } = await http.post('/auth/send-code', { email: form.email, purpose: 'reset' });
+    const purpose = mode.value === 'register' ? 'register' : 'reset';
+    const { data } = await http.post('/auth/send-code', { email: form.email, purpose });
     notice.value = '验证码已发送，10 分钟内有效';
     devCode.value = data.devCode || '';
     counting.value = true;
@@ -317,6 +338,12 @@ onBeforeUnmount(() => {
   margin-top: 8px;
 }
 
+.hint-tip {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
 .third {
   margin-top: 22px;
 }
@@ -348,19 +375,21 @@ onBeforeUnmount(() => {
   font-weight: 600;
   color: #ffffff;
   text-decoration: none;
-  background: rgba(255, 255, 255, 0.06);
+  background: var(--fill);
   border: 1px solid var(--glass-border);
   border-radius: 999px;
   transition: background 0.2s;
 }
 
 .btn-github:hover {
-  background: rgba(255, 255, 255, 0.12);
+  background: var(--fill-hover);
 }
 
-/* 登录页不用毛玻璃：面板改半透明深色（背景星空直接透出） */
+/* 与其他页面卡片完全统一：同一套玻璃蓝底色/描边/圆角（全局已无模糊） */
 .panel {
-  background: rgb(10 18 28 / 55%);
-  border: 1px solid rgb(140 198 226 / 20%);
+  background: var(--glass-bg);
+  border: 1px solid var(--glass-border);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 18px 50px rgb(0 0 0 / 45%);
 }
 </style>

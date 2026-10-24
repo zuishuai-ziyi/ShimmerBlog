@@ -1,5 +1,6 @@
 import { defineStore } from 'pinia';
 import http from '../api/http';
+import { setSiteName } from '../utils/title';
 
 export interface SiteInfo {
   title: string;
@@ -33,7 +34,7 @@ export const useSiteStore = defineStore('site', {
       try {
         const { data } = await http.get<SiteInfo>('/site');
         this.info = data;
-        document.title = data.title;
+        setSiteName(data.title);
       } catch {
         /* 后端不可用时保留默认文案 */
       } finally {

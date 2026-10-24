@@ -143,22 +143,23 @@ const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar
   white-space: nowrap;
 }
 
+/* 同属玻璃蓝家族（与用户胶囊一致），但提高底色/描边亮度，作为唯一的主行动入口 */
 .btn-login {
   margin-left: 6px;
-  padding: 8px 18px;
+  padding: 7px 16px;
   border-radius: 999px;
   font-size: 14px;
   font-weight: 600;
-  /* 刻意不用工具栏那套玻璃蓝（rgb 52,144,191）与实心 --fill，
-     改用提亮强调色 + 深色字，在胶囊里一眼可辨；无阴影、无位移动画 */
-  color: #06202c;
+  color: #ffffff;
   text-decoration: none;
-  background: var(--accent);
-  transition: background 0.2s;
+  background: rgba(140, 198, 226, 0.26);
+  border: 1px solid rgba(140, 198, 226, 0.26);
+  transition: background 0.25s ease, border-color 0.25s ease;
 }
 
 .btn-login:hover {
-  background: rgb(168, 214, 236);
+  background: rgba(140, 198, 226, 0.38);
+  border-color: rgba(140, 198, 226, 0.45);
 }
 
 @media (max-width: 560px) {

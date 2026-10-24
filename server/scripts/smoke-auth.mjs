@@ -29,9 +29,22 @@ const post = (path, payload, token) =>
     body: JSON.stringify(payload),
   });
 
-let r = await post('/register', { email: MAIL, password: 'pass123456', name: '测试用户' });
+// 注册需邮箱验证（第 45 轮）：先发注册验证码，再带码注册
+let r = await post('/send-code', { email: MAIL, purpose: 'register' });
 let body = await r.json().catch(() => ({}));
+ok('send-code purpose=register 200', r.status === 200 && body.sent === true, `via=${body.via}`);
+const regCode = body.devCode ?? (await latestCode(MAIL));
+
+r = await post('/register', { email: MAIL, password: 'pass123456' });
+ok('register 无验证码 400', r.status === 400);
+
+r = await post('/register', { email: MAIL, password: 'pass123456', code: String((Number(regCode) + 1) % 1000000).padStart(6, '0') });
+ok('register 错误验证码 401', r.status === 401);
+
+r = await post('/register', { email: MAIL, password: 'pass123456', name: '测试用户', code: regCode });
+body = await r.json().catch(() => ({}));
 ok('register 201', r.status === 201 && body.token && body.user?.email === MAIL, body.user?.name ?? '');
+ok('register 后邮箱已验证', body.user?.email_verified === true);
 const t1 = body.token;
 
 r = await post('/register', { email: MAIL, password: 'pass123456' });

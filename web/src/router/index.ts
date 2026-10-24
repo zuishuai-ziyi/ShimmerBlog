@@ -1,5 +1,6 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
+import { setArticleTitle } from '../utils/title';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -32,6 +33,13 @@ router.beforeEach(async (to) => {
     return { name: 'login', query: { redirect: to.fullPath } };
   }
   return true;
+});
+
+// 每次切换路由先恢复站点默认标题；文章页会在数据加载完成后自行覆盖为文章标题
+router.afterEach((to) => {
+  setArticleTitle(null);
+  // 与 index.html 的首屏底色保持一致：后台浅底、前台黑底（避免切页时边缘露出错误底色）
+  document.documentElement.classList.toggle('admin-route', to.name === 'admin');
 });
 
 export default router;

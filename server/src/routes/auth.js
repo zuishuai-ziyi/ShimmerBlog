@@ -23,19 +23,33 @@ function githubRedirectUri(req) {
 /* ---------- 注册（邮箱 + 密码） ---------- */
 authRouter.post('/register', async (req, res, next) => {
   try {
-    const { email, password, name } = req.body ?? {};
+    const { email, password, name, code } = req.body ?? {};
     if ((await getSetting('register_open')) !== '1') {
       return res.status(403).json({ error: '站点已关闭注册，请联系管理员' });
     }
     if (!EMAIL_RE.test(String(email ?? ''))) return res.status(400).json({ error: '邮箱格式不正确' });
     if (typeof password !== 'string' || password.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
-    const nick = String(name ?? '').trim() || String(email).split('@')[0].slice(0, 50);
-    const [exists] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [email]);
+    const mail = String(email).toLowerCase();
+    const nick = String(name ?? '').trim() || mail.split('@')[0].slice(0, 50);
+    const [exists] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [mail]);
     if (exists.length > 0) return res.status(409).json({ error: '该邮箱已注册' });
+    // 注册必须验证邮箱：先 POST /auth/send-code {purpose:'register'} 取码，再带 code 提交
+    if (!/^\d{6}$/.test(String(code ?? ''))) {
+      return res.status(400).json({ error: '请先获取并填写邮箱验证码' });
+    }
+    const [codes] = await pool.query(
+      `SELECT id FROM email_codes
+       WHERE email = ? AND code = ? AND purpose = 'register' AND used = 0 AND expires_at > NOW()
+       ORDER BY id DESC LIMIT 1`,
+      [mail, code]
+    );
+    if (codes.length === 0) return res.status(401).json({ error: '验证码错误或已过期' });
+    await pool.query('UPDATE email_codes SET used = 1 WHERE id = ?', [codes[0].id]);
     const hash = await bcrypt.hash(password, 10);
+    // 验证码已校验通过，账号即为已验证状态
     const [r] = await pool.query(
-      'INSERT INTO users (email, password_hash, name, email_verified) VALUES (?, ?, ?, 0)',
-      [email, hash, nick]
+      'INSERT INTO users (email, password_hash, name, email_verified) VALUES (?, ?, ?, 1)',
+      [mail, hash, nick]
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     sendWelcomeEmail(rows[0]).catch(() => {}); // 欢迎邮件：异步发送，不阻塞注册
@@ -79,9 +93,15 @@ const codeLimiter = makeLimiter({
 authRouter.post('/send-code', codeLimiter, async (req, res, next) => {
   try {
     const { email } = req.body ?? {};
-    const purpose = req.body?.purpose === 'reset' ? 'reset' : 'login';
+    const rawPurpose = req.body?.purpose;
+    const purpose = rawPurpose === 'reset' ? 'reset' : rawPurpose === 'register' ? 'register' : 'login';
     if (!EMAIL_RE.test(String(email ?? ''))) return res.status(400).json({ error: '邮箱格式不正确' });
     const mail = String(email).toLowerCase();
+    if (purpose === 'register') {
+      // 注册验证码：邮箱已被占用时直接拒绝，避免白发一封邮件
+      const [u] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [mail]);
+      if (u.length > 0) return res.status(409).json({ error: '该邮箱已注册' });
+    }
     if (purpose === 'reset') {
       // 找回密码：仅向已注册且未被禁用的邮箱发码，同时不暴露邮箱是否存在以外的信息
       const [u] = await pool.query('SELECT status FROM users WHERE email = ? LIMIT 1', [mail]);

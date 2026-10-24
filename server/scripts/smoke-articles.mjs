@@ -5,15 +5,15 @@ const ok = (name, cond, extra = '') => {
   if (cond) { pass++; console.log(`PASS ${name}`); }
   else { fail++; console.log(`FAIL ${name} ${extra}`); }
 };
+import { registerUser } from './_test-lib.mjs';
+
 const j = (r) => r.json();
 
 async function register(name) {
   const email = `${name}_${Date.now()}@test.local`;
-  const r = await fetch(`${BASE}/auth/register`, {
-    method: 'POST', headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ email, password: 'password123', name }),
-  });
-  return (await j(r)).token;
+  // 注册需邮箱验证（第 45 轮）：registerUser 内部先发码再带码注册
+  const r = await registerUser(BASE, { email, password: 'password123', name });
+  return r.data?.token;
 }
 const auth = (t) => ({ 'Content-Type': 'application/json', Authorization: `Bearer ${t}` });
 

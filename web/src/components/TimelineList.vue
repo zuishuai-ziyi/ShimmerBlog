@@ -18,6 +18,9 @@
         :style="{
           strokeDasharray: `${p.dash} ${p.tlen - p.dash}`,
           '--tlen': String(p.tlen),
+          '--from': String(p.from),
+          '--mid': String(p.mid),
+          '--to': String(p.to),
           animationDuration: p.pdur + 's',
           animationDelay: p.delay + 's',
         }"
@@ -60,6 +63,12 @@ type Curve = {
   ca: string;
   len: number;
   dash: number;
+  /** 亮段刚进入线尾（底部）时的 dashoffset —— 可见行程起点 */
+  from: number;
+  /** 亮段刚离开线头（顶部）时的 dashoffset —— 可见行程终点 */
+  mid: number;
+  /** 一个周期结束时的 dashoffset = from + tlen（无缝接续） */
+  to: number;
   tlen: number;
   pdur: number;
   delay: number;
@@ -218,8 +227,11 @@ function measure() {
     const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
     tmp.setAttribute('d', d);
     const len = Math.round(tmp.getTotalLength() * 10) / 10;
-    const PULSE_SPEED = 180; // px/s：光效行进速度，所有线恒定、不受线长影响
-    const PAUSE_SECONDS = 1.2; // 光效走完后的空窗停顿，之后才重新从底部出现
+    // 亮段从一端扫到另一端的时间：所有线相同 → 行进速度与线长成正比（长线快、短线慢）
+    const SWEEP_SECONDS = 1.5;
+    const PAUSE_SECONDS = 2; // 光效走完后的空窗停顿，之后才重新从底部出现
+    const PULSE_RATIO = 0.15; // 亮段长度占整条线长的比例（越小光效越短）
+    const pulseSpeed = (len * (1 + PULSE_RATIO)) / SWEEP_SECONDS; // px/s，∝ 线长
     const ia = Math.floor(prand(seed, 3) * CURVE_COLORS.length);
     list.push({
       d,
@@ -229,10 +241,18 @@ function measure() {
       y2,
       ca: CURVE_COLORS[ia],
       len,
-      // 亮段约线长 45%（不设下限）；图案周期 = 线长 + 亮段 + 停顿行程：间隔盖住整条线保证严格单光效，末尾空窗即停顿
-      dash: Math.round(len * 0.45 * 10) / 10,
-      tlen: Math.round((len * 1.45 + PAUSE_SECONDS * PULSE_SPEED) * 10) / 10,
-      pdur: Math.round(((len * 1.45 + PAUSE_SECONDS * PULSE_SPEED) / PULSE_SPEED) * 100) / 100,
+      // 亮段长度为线长的 PULSE_RATIO（不设下限）；图案周期 = 线长 + 亮段 + 停顿行程：
+      // 间隔盖住整条线保证严格单光效，末尾空窗即停顿；位移一个周期后无缝接续
+      dash: Math.round(len * PULSE_RATIO * 10) / 10,
+      // 相位对齐：0% 时亮段刚好进入线尾，缓动区间恰好覆盖「亮段在线上」的整段行程，
+      // 所以「慢→快→慢」全程可见；离开线头后到周期结束是线外的匀速空窗行程
+      from: -len,
+      mid: Math.round(len * PULSE_RATIO * 10) / 10,
+      to: Math.round((len * (1 + PULSE_RATIO) + PAUSE_SECONDS * pulseSpeed) * 10) / 10 - len,
+      tlen: Math.round((len * (1 + PULSE_RATIO) + PAUSE_SECONDS * pulseSpeed) * 10) / 10,
+      pdur:
+        Math.round(((len * (1 + PULSE_RATIO) + PAUSE_SECONDS * pulseSpeed) / pulseSpeed) * 100) /
+        100,
       delay: -prand(seed, 6) * 12,
     });
   }
@@ -307,7 +327,8 @@ onBeforeUnmount(() => {
   opacity: 0.18;
 }
 
-/* 亮脉冲：淡色短线段沿路径自下而上匀速巡游（dashoffset 递增 = 朝路径起点 = 向上） */
+/* 亮脉冲：淡色短线段沿路径自下而上巡游（dashoffset 递增 = 朝路径起点 = 向上）
+   扫过整条线的一段做「慢 → 快 → 慢」的非线性运动，走完后的空窗段匀速 */
 .pulse {
   fill: none;
   stroke: #ffffff;
@@ -320,10 +341,19 @@ onBeforeUnmount(() => {
 
 @keyframes pulse-move {
   from {
-    stroke-dashoffset: 0;
+    stroke-dashoffset: var(--from);
+    /* 0 → 60.66%：亮段自下而上扫过整条线（起止都在线下/线上端点），缓入缓出
+       百分比 = SWEEP_SECONDS / (SWEEP_SECONDS + PAUSE_SECONDS) = 1.85 / 3.05 ≈ 60.66%
+       改这两个常量时必须同步这里（@keyframes 的选择器不能用 CSS 变量） */
+    animation-timing-function: cubic-bezier(0.42, 0, 0.58, 1);
+  }
+  60.66% {
+    stroke-dashoffset: var(--mid);
+    /* 60.66% → 100%：亮段已离开，匀速走过停顿行程 */
+    animation-timing-function: linear;
   }
   to {
-    stroke-dashoffset: var(--tlen);
+    stroke-dashoffset: var(--to);
   }
 }
 

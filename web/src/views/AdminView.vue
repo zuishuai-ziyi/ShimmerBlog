@@ -1,22 +1,28 @@
 <template>
   <div class="admin">
+    <!-- 校验登录状态中：已过期令牌不会先闪出后台内容 -->
+    <div v-if="booting" class="boot">正在验证登录状态…</div>
+
     <!-- ======== 登录门 ======== -->
-    <div v-if="!admin.authed" class="gate">
-      <div class="gate-card">
-        <h1><span class="grad">ShimmerBlog</span> 管理后台</h1>
-        <p class="gate-sub">请输入管理密码进入</p>
-        <form @submit.prevent="doLogin">
-          <input
-            v-model="password"
-            type="password"
-            placeholder="管理密码"
-            autocomplete="current-password"
-          />
-          <button type="submit" :disabled="busy">{{ busy ? '验证中…' : '进入后台' }}</button>
-        </form>
-        <p v-if="gateError" class="gate-err">{{ gateError }}</p>
-        <p class="gate-hint">管理密码与用户账号无关，仅用于本后台。</p>
+    <div v-else-if="!admin.authed" class="gate-col">
+      <div class="gate">
+        <div class="gate-card">
+          <h1><span class="grad">ShimmerBlog</span> 管理后台</h1>
+          <p class="gate-sub">请输入管理密码进入</p>
+          <form @submit.prevent="doLogin">
+            <input
+              v-model="password"
+              type="password"
+              placeholder="管理密码"
+              autocomplete="current-password"
+            />
+            <button type="submit" :disabled="busy">{{ busy ? '验证中…' : '进入后台' }}</button>
+          </form>
+          <p v-if="gateError" class="gate-err">{{ gateError }}</p>
+          <p class="gate-hint">管理密码与用户账号无关，仅用于本后台。</p>
+          </div>
       </div>
+      <SiteFooter tone="light" />
     </div>
 
     <!-- ======== 后台主体 ======== -->
@@ -35,211 +41,214 @@
         </div>
       </aside>
 
-      <main class="main">
-        <!-- ============ 站点 ============ -->
-        <section v-if="tab === 'site'" class="pane">
-          <div class="card">
-            <h2>站点信息</h2>
-            <label class="row"><span>主标题</span><input v-model.trim="siteForm.site_title" /></label>
-            <label class="row"><span>副标题</span><input v-model.trim="siteForm.site_subtitle" /></label>
-            <label class="row"><span>站点描述</span><input v-model="siteForm.site_description" /></label>
-                <label class="row"><span>关于页副标题</span><input v-model="siteForm.about_subtitle" placeholder="留空用默认：一个会发光的角落" /></label>
-          </div>
-
-          <div class="card">
-            <h2>站点 Logo</h2>
-            <div class="logo-box">
-              <img v-if="logoUrl" :src="logoUrl" alt="logo" class="logo-preview" />
-              <span v-else class="logo-empty">未设置（使用默认 logo.png）</span>
-              <div class="logo-ops">
-                <label class="file-btn">
-                  上传新 Logo
-                  <input type="file" accept="image/*" hidden @change="uploadLogo" />
-                </label>
-                <button v-if="logoUrl" class="ghost danger" @click="removeLogo">恢复默认</button>
-              </div>
+      <div class="main-col">
+        <main class="main">
+          <!-- ============ 站点 ============ -->
+          <section v-if="tab === 'site'" class="pane">
+            <div class="card">
+              <h2>站点信息</h2>
+              <label class="row"><span>主标题</span><input v-model.trim="siteForm.site_title" /></label>
+              <label class="row"><span>副标题</span><input v-model.trim="siteForm.site_subtitle" /></label>
+              <label class="row"><span>站点描述</span><input v-model="siteForm.site_description" /></label>
+                  <label class="row"><span>关于页副标题</span><input v-model="siteForm.about_subtitle" placeholder="留空用默认：一个会发光的角落" /></label>
             </div>
 
-            <h2 class="mt">用户默认头像</h2>
-            <div class="logo-box">
-              <img v-if="defaultAvatarUrl" :src="defaultAvatarUrl" alt="默认头像" class="logo-preview" />
-              <span v-else class="logo-empty">未设置（使用内置 default 头像）</span>
-              <div class="logo-ops">
-                <label class="file-btn">
-                  上传默认头像
-                  <input type="file" accept="image/*" hidden @change="uploadDefaultAvatar" />
-                </label>
-                <button v-if="defaultAvatarUrl" class="ghost danger" @click="removeDefaultAvatar">恢复内置</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="card">
-            <h2>关于页面内容（HTML）</h2>
-            <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
-            <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
-          </div>
-
-          <div class="ops">
-            <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_subtitle', 'about_html'])">
-              {{ saving ? '保存中…' : '保存站点设置' }}
-            </button>
-            <span v-if="flash" class="flash">{{ flash }}</span>
-          </div>
-        </section>
-
-        <!-- ============ 邮件 ============ -->
-        <section v-if="tab === 'mail'" class="pane">
-          <div class="card">
-            <h2>邮件模板</h2>
-            <p class="hint">所有系统邮件的主题与正文均可自定义，留空使用内置默认；点击占位符可插入到正文光标处。</p>
-
-            <div v-for="t in mailTemplates" :key="t.kind" class="tpl">
-              <div class="tpl-head">
-                <div>
-                  <div class="tpl-name">{{ t.label }}</div>
-                  <div class="tpl-desc">{{ t.desc }}</div>
+            <div class="card">
+              <h2>站点 Logo</h2>
+              <div class="logo-box">
+                <img v-if="logoUrl" :src="logoUrl" alt="logo" class="logo-preview" />
+                <span v-else class="logo-empty">未设置（使用默认 logo.png）</span>
+                <div class="logo-ops">
+                  <label class="file-btn">
+                    上传新 Logo
+                    <input type="file" accept="image/*" hidden @change="uploadLogo" />
+                  </label>
+                  <button v-if="logoUrl" class="ghost danger" @click="removeLogo">恢复默认</button>
                 </div>
-                <button class="ghost sm" type="button" @click="resetTpl(t)">恢复默认</button>
               </div>
-              <label class="row"><span>主题</span><input v-model="mailForm[t.subjectKey]" :placeholder="'默认：' + t.defaultSubject" /></label>
-              <div class="body-row"><span>正文</span>
-                <textarea
-                  :ref="(el) => setBodyRef(t.kind, el)"
-                  v-model="mailForm[t.bodyKey]"
-                  class="ta mono"
-                  rows="5"
-                  spellcheck="false"
-                  :placeholder="'默认：' + t.defaultBody"
-                />
-              </div>
-              <div class="ph-row">
-                <span class="ph-label">占位符</span>
-                <button v-for="p in t.placeholders" :key="p" type="button" class="ph-chip" @click="insertPh(t, p)">{{ p }}</button>
+
+              <h2 class="mt">用户默认头像</h2>
+              <div class="logo-box">
+                <img v-if="defaultAvatarUrl" :src="defaultAvatarUrl" alt="默认头像" class="logo-preview" />
+                <span v-else class="logo-empty">未设置（使用内置 default 头像）</span>
+                <div class="logo-ops">
+                  <label class="file-btn">
+                    上传默认头像
+                    <input type="file" accept="image/*" hidden @change="uploadDefaultAvatar" />
+                  </label>
+                  <button v-if="defaultAvatarUrl" class="ghost danger" @click="removeDefaultAvatar">恢复内置</button>
+                </div>
               </div>
             </div>
-          </div>
 
-          <div class="card">
-            <h2>SMTP 发信配置</h2>
-            <p class="hint status" :class="{ ok: smtpEnabled }">{{ smtpEnabled ? '● 已配置，可以发信' : '○ 未配置（将无法发送任何邮件）' }}</p>
-            <div class="grid">
-              <label class="row"><span>SMTP 主机</span><input v-model.trim="mailForm.smtp_host" placeholder="smtp.example.com" /></label>
-              <label class="row"><span>端口</span><input v-model.trim="mailForm.smtp_port" placeholder="465" /></label>
-              <label class="row"><span>发件人</span><input v-model.trim="mailForm.smtp_from" placeholder="ShimmerBlog &lt;no-reply@example.com&gt;" /></label>
-              <p class="hint">发件人必须包含邮箱地址，推荐格式：<code>名称 &lt;邮箱&gt;</code>；只填名称会导致外域邮箱拒收（信封无地址）。</p>
-              <label class="row"><span>账号</span><input v-model.trim="mailForm.smtp_user" /></label>
-              <label class="row"><span>密码/授权码</span><input v-model="mailForm.smtp_pass" type="password" :placeholder="smtpPassSet ? '已配置，留空保持不变' : '未配置'" /></label>
-              <label class="row check"><input type="checkbox" v-model="smtpSecureBool" /><span>SSL/TLS（465 端口通常勾选）</span></label>
+            <div class="card">
+              <h2>关于页面内容（HTML）</h2>
+              <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
+              <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
             </div>
-          </div>
 
-          <div class="card">
-            <h2>发送测试邮件</h2>
-            <p class="hint">使用「测试邮件」模板向指定邮箱发一封真实邮件，验证 SMTP 配置。</p>
-            <div class="row send-row">
-              <input v-model.trim="testTo" placeholder="接收邮箱" />
-              <button class="ghost" :disabled="testing" @click="sendTest">{{ testing ? '发送中…' : '发送' }}</button>
+            <div class="ops">
+              <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_subtitle', 'about_html'])">
+                {{ saving ? '保存中…' : '保存站点设置' }}
+              </button>
+              <span v-if="flash" class="flash">{{ flash }}</span>
             </div>
-            <p v-if="testResult" class="hint" :class="{ ok: testOk }">{{ testResult }}</p>
-          </div>
+          </section>
 
-          <div class="ops">
-            <button class="primary" :disabled="saving" @click="saveMailSettings">
-              {{ saving ? '保存中…' : '保存邮件设置' }}
-            </button>
-            <span v-if="flash" class="flash">{{ flash }}</span>
-          </div>
-        </section>
+          <!-- ============ 邮件 ============ -->
+          <section v-if="tab === 'mail'" class="pane">
+            <div class="card">
+              <h2>邮件模板</h2>
+              <p class="hint">所有系统邮件的主题与正文均可自定义，留空使用内置默认；点击占位符可插入到正文光标处。</p>
 
-        <!-- ============ 用户 ============ -->
-        <section v-if="tab === 'users'" class="pane">
-          <div class="card">
-            <div class="list-head">
-              <h2>用户管理 <small>{{ userTotal }} 人</small></h2>
-              <input v-model.trim="userQuery" class="search" placeholder="搜索邮箱 / 昵称…" @input="searchUsers" />
+              <div v-for="t in mailTemplates" :key="t.kind" class="tpl">
+                <div class="tpl-head">
+                  <div>
+                    <div class="tpl-name">{{ t.label }}</div>
+                    <div class="tpl-desc">{{ t.desc }}</div>
+                  </div>
+                  <button class="ghost sm" type="button" @click="resetTpl(t)">恢复默认</button>
+                </div>
+                <label class="row"><span>主题</span><input v-model="mailForm[t.subjectKey]" :placeholder="'默认：' + t.defaultSubject" /></label>
+                <div class="body-row"><span>正文</span>
+                  <textarea
+                    :ref="(el) => setBodyRef(t.kind, el)"
+                    v-model="mailForm[t.bodyKey]"
+                    class="ta mono"
+                    rows="5"
+                    spellcheck="false"
+                    :placeholder="'默认：' + t.defaultBody"
+                  />
+                </div>
+                <div class="ph-row">
+                  <span class="ph-label">占位符</span>
+                  <button v-for="p in t.placeholders" :key="p" type="button" class="ph-chip" @click="insertPh(t, p)">{{ p }}</button>
+                </div>
+              </div>
             </div>
-            <div class="tbl-wrap">
-              <table class="tbl">
-                <thead>
-                  <tr><th>ID</th><th>用户</th><th>名称颜色</th><th>权限</th><th>状态</th><th>注册时间</th><th></th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="u in users" :key="u.id">
-                    <td class="dim">{{ u.id }}</td>
-                    <td>
-                      <div class="cell-user">
-                        <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
-                        <div>
-                          <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
-                          <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template></div>
+
+            <div class="card">
+              <h2>SMTP 发信配置</h2>
+              <p class="hint status" :class="{ ok: smtpEnabled }">{{ smtpEnabled ? '● 已配置，可以发信' : '○ 未配置（将无法发送任何邮件）' }}</p>
+              <div class="grid">
+                <label class="row"><span>SMTP 主机</span><input v-model.trim="mailForm.smtp_host" placeholder="smtp.example.com" /></label>
+                <label class="row"><span>端口</span><input v-model.trim="mailForm.smtp_port" placeholder="465" /></label>
+                <label class="row"><span>发件人</span><input v-model.trim="mailForm.smtp_from" placeholder="ShimmerBlog &lt;no-reply@example.com&gt;" /></label>
+                <p class="hint">发件人必须包含邮箱地址，推荐格式：<code>名称 &lt;邮箱&gt;</code>；只填名称会导致外域邮箱拒收（信封无地址）。</p>
+                <label class="row"><span>账号</span><input v-model.trim="mailForm.smtp_user" /></label>
+                <label class="row"><span>密码/授权码</span><input v-model="mailForm.smtp_pass" type="password" :placeholder="smtpPassSet ? '已配置，留空保持不变' : '未配置'" /></label>
+                <label class="row check"><input type="checkbox" v-model="smtpSecureBool" /><span>SSL/TLS（465 端口通常勾选）</span></label>
+              </div>
+            </div>
+
+            <div class="card">
+              <h2>发送测试邮件</h2>
+              <p class="hint">使用「测试邮件」模板向指定邮箱发一封真实邮件，验证 SMTP 配置。</p>
+              <div class="row send-row">
+                <input v-model.trim="testTo" placeholder="接收邮箱" />
+                <button class="ghost" :disabled="testing" @click="sendTest">{{ testing ? '发送中…' : '发送' }}</button>
+              </div>
+              <p v-if="testResult" class="hint" :class="{ ok: testOk }">{{ testResult }}</p>
+            </div>
+
+            <div class="ops">
+              <button class="primary" :disabled="saving" @click="saveMailSettings">
+                {{ saving ? '保存中…' : '保存邮件设置' }}
+              </button>
+              <span v-if="flash" class="flash">{{ flash }}</span>
+            </div>
+          </section>
+
+          <!-- ============ 用户 ============ -->
+          <section v-if="tab === 'users'" class="pane">
+            <div class="card">
+              <div class="list-head">
+                <h2>用户管理 <small>{{ userTotal }} 人</small></h2>
+                <input v-model.trim="userQuery" class="search" placeholder="搜索邮箱 / 昵称…" @input="searchUsers" />
+              </div>
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>ID</th><th>用户</th><th>名称颜色</th><th>权限</th><th>状态</th><th>注册时间</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="u in users" :key="u.id">
+                      <td class="dim">{{ u.id }}</td>
+                      <td>
+                        <div class="cell-user">
+                          <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
+                          <div>
+                            <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
+                            <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template></div>
+                          </div>
                         </div>
-                      </div>
-                    </td>
-                    <td>
-                      <div class="color-cell">
-                        <input type="color" :value="toHex6(u.name_color)" @input="setColor(u, $event)" />
-                        <code class="dim">{{ u.name_color || '默认' }}</code>
-                      </div>
-                    </td>
-                    <td>
-                      <label class="perm"><input type="checkbox" :checked="hasPerm(u, 'post')" @change="setPerm(u, 'post', $event)" />发布文章</label>
-                    </td>
-                    <td>
-                      <button class="pill" :class="u.status" @click="toggleStatus(u)">
-                        {{ u.status === 'active' ? '正常' : '已禁用' }}
-                      </button>
-                    </td>
-                    <td class="dim">{{ fmtDate(u.created_at) }}</td>
-                    <td class="row-ops">
-                      <a class="ghost sm" :href="`/space/${u.id}`" target="_blank">空间</a>
-                      <button class="ghost sm" @click="openEdit(u)">编辑</button>
-                      <button class="ghost sm danger" @click="removeUser(u)">删除</button>
-                    </td>
-                  </tr>
-                </tbody>
-              </table>
+                      </td>
+                      <td>
+                        <div class="color-cell">
+                          <input type="color" :value="toHex6(u.name_color)" @input="setColor(u, $event)" />
+                          <code class="dim">{{ u.name_color || '默认' }}</code>
+                        </div>
+                      </td>
+                      <td>
+                        <label class="perm"><input type="checkbox" :checked="hasPerm(u, 'post')" @change="setPerm(u, 'post', $event)" />发布文章</label>
+                      </td>
+                      <td>
+                        <button class="pill" :class="u.status" @click="toggleStatus(u)">
+                          {{ u.status === 'active' ? '正常' : '已禁用' }}
+                        </button>
+                      </td>
+                      <td class="dim">{{ fmtDate(u.created_at) }}</td>
+                      <td class="row-ops">
+                        <a class="ghost sm" :href="`/space/${u.id}`" target="_blank">空间</a>
+                        <button class="ghost sm" @click="openEdit(u)">编辑</button>
+                        <button class="ghost sm danger" @click="removeUser(u)">删除</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-if="!users.length" class="hint">没有匹配的用户。</p>
             </div>
-            <p v-if="!users.length" class="hint">没有匹配的用户。</p>
-          </div>
-        </section>
+          </section>
 
-        <!-- ============ 文章 ============ -->
-        <section v-if="tab === 'articles'" class="pane">
-          <div class="card">
-            <div class="list-head">
-              <h2>文章管理 <small>{{ articleTotal }} 篇（含草稿）</small></h2>
-              <input v-model.trim="articleQuery" class="search" placeholder="搜索标题…" @input="searchArticles" />
+          <!-- ============ 文章 ============ -->
+          <section v-if="tab === 'articles'" class="pane">
+            <div class="card">
+              <div class="list-head">
+                <h2>文章管理 <small>{{ articleTotal }} 篇（含草稿）</small></h2>
+                <input v-model.trim="articleQuery" class="search" placeholder="搜索标题…" @input="searchArticles" />
+              </div>
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>ID</th><th>标题</th><th>作者</th><th>状态</th><th>置顶</th><th>更新时间</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="a in articles" :key="a.id">
+                      <td class="dim">{{ a.id }}</td>
+                      <td class="title-cell"><a :href="`/article/${a.id}`" target="_blank">{{ a.title }}</a></td>
+                      <td>
+                        <span :style="a.author_name_color ? { color: a.author_name_color } : undefined">{{ a.author_name }}</span>
+                        <small v-if="a.status === 'draft'" class="dim"> · 草稿</small>
+                      </td>
+                      <td><span class="pill" :class="a.status">{{ a.status === 'published' ? '已发布' : '草稿' }}</span></td>
+                      <td>
+                        <button class="pill" :class="{ pinned: !!a.pinned }" @click="togglePin(a)">
+                          {{ a.pinned ? '已置顶' : '未置顶' }}
+                        </button>
+                      </td>
+                      <td class="dim">{{ fmtDate(a.updated_at) }}</td>
+                      <td><button class="ghost sm danger" @click="deleteArticle(a)">删除</button></td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-if="!articles.length" class="hint">没有匹配的文章。</p>
             </div>
-            <div class="tbl-wrap">
-              <table class="tbl">
-                <thead>
-                  <tr><th>ID</th><th>标题</th><th>作者</th><th>状态</th><th>置顶</th><th>更新时间</th><th></th></tr>
-                </thead>
-                <tbody>
-                  <tr v-for="a in articles" :key="a.id">
-                    <td class="dim">{{ a.id }}</td>
-                    <td class="title-cell"><a :href="`/article/${a.id}`" target="_blank">{{ a.title }}</a></td>
-                    <td>
-                      <span :style="a.author_name_color ? { color: a.author_name_color } : undefined">{{ a.author_name }}</span>
-                      <small v-if="a.status === 'draft'" class="dim"> · 草稿</small>
-                    </td>
-                    <td><span class="pill" :class="a.status">{{ a.status === 'published' ? '已发布' : '草稿' }}</span></td>
-                    <td>
-                      <button class="pill" :class="{ pinned: !!a.pinned }" @click="togglePin(a)">
-                        {{ a.pinned ? '已置顶' : '未置顶' }}
-                      </button>
-                    </td>
-                    <td class="dim">{{ fmtDate(a.updated_at) }}</td>
-                    <td><button class="ghost sm danger" @click="deleteArticle(a)">删除</button></td>
-                  </tr>
-                </tbody>
-              </table>
-            </div>
-            <p v-if="!articles.length" class="hint">没有匹配的文章。</p>
-          </div>
-        </section>
-      </main>
+          </section>
+        </main>
+        <SiteFooter tone="light" />
+      </div>
     </div>
 
     <!-- 改管理密码弹层 -->
@@ -276,9 +285,12 @@
 import { onMounted, reactive, ref } from 'vue';
 import adminHttp, { errMsg } from '../api/adminHttp';
 import { useAdminStore } from '../stores/admin';
+import SiteFooter from '../components/SiteFooter.vue';
 import defaultAvatar from '../assets/default-avatar.svg';
 
 const admin = useAdminStore();
+// 已有本地令牌时先进入「验证中」态，避免过期令牌先渲染后台内容再跳回登录门
+const booting = ref(!!admin.token && !admin.checked);
 
 type Tab = 'site' | 'mail' | 'users' | 'articles';
 const tab = ref<Tab>('site');
@@ -709,16 +721,13 @@ function fmtDate(s: string): string {
 }
 
 onMounted(async () => {
-  if (!admin.authed) {
-    await admin.check();
-    if (admin.authed) await bootstrap();
-  } else {
-    await bootstrap();
-  }
-  if (admin.authed) {
-    await loadUsers();
-    await loadArticles();
-  }
+  // 无论有无令牌都先校验一次会话：过期令牌不会闪现后台内容
+  await admin.check();
+  booting.value = false;
+  if (!admin.authed) return;
+  await bootstrap();
+  await loadUsers();
+  await loadArticles();
 });
 </script>
 
@@ -753,9 +762,26 @@ onMounted(async () => {
   color: transparent;
 }
 
+/* 校验登录状态中 */
+.boot {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  min-height: 100vh;
+  font-size: 13.5px;
+  color: var(--text-3);
+}
+
+/* 登录门：内容列 + 底部页脚，整体撑满视口 */
+.gate-col {
+  display: flex;
+  flex-direction: column;
+  min-height: 100vh;
+}
+
 /* 登录门 */
 .gate {
-  min-height: 100vh;
+  flex: 1 0 auto;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -849,6 +875,14 @@ onMounted(async () => {
 .shell {
   display: flex;
   min-height: 100vh;
+}
+
+/* 右侧内容列：内容撑开 + 页脚贴底 */
+.main-col {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 .side {
@@ -1353,6 +1387,7 @@ onMounted(async () => {
 .tbl a {
   color: var(--text-1);
   text-decoration: none;
+  transition: color 0.15s;
 }
 
 .tbl a:hover {

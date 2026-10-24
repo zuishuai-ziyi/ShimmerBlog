@@ -40,6 +40,7 @@ import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import { formatDate } from '../utils/format';
+import { setArticleTitle } from '../utils/title';
 import type { Article } from '../types';
 import bundledAvatar from '../assets/default-avatar.svg';
 
@@ -70,7 +71,7 @@ async function load(id: string) {
   try {
     const { data } = await http.get<{ article: Article }>(`/articles/${id}`);
     article.value = data.article;
-    document.title = `${data.article.title} · 微光博客`;
+    setArticleTitle(data.article.title);
   } catch (e) {
     error.value = errMsg(e);
   } finally {
@@ -105,6 +106,7 @@ watch(
 }
 
 .sheet {
+  /* 半透明底色沿用 .glass；背景模糊已由 tokens.css 的 --glass-blur: none 全局关闭 */
   padding: 34px 40px 48px;
 }
 
@@ -114,7 +116,7 @@ watch(
   color: var(--text-dim);
   text-decoration: none;
   margin-bottom: 18px;
-  transition: color 0.2s;
+  transition: color 0.25s ease;
 }
 
 .back:hover {
@@ -230,6 +232,7 @@ a.author:hover {
   color: var(--accent);
   text-decoration: none;
   border-bottom: 1px solid rgba(140, 198, 226, 0.4);
+  transition: color 0.2s, border-color 0.2s;
 }
 
 .prose :deep(a:hover) {
