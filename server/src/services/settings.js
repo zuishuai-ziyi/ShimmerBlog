@@ -10,7 +10,7 @@ let loaded = false;
 
 const DEFAULTS = {
   site_title: '微光博客',
-  site_subtitle: '在深空里写字，让每一篇都亮一点点。',
+  site_subtitle: '追光的人，终会光芒万丈',
   site_description: '微光博客 —— 一个会发光的个人博客角落。',
   github_client_id: '',
   github_client_secret: '',

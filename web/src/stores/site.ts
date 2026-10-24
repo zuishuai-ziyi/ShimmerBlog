@@ -13,7 +13,7 @@ export const useSiteStore = defineStore('site', {
   state: () => ({
     info: {
       title: '微光博客',
-      subtitle: '在深空里写字，让每一篇都亮一点点。',
+      subtitle: '追光的人，终会光芒万丈',
       description: '微光博客 —— 一个会发光的个人博客角落。',
       registerOpen: true,
       githubEnabled: false,
