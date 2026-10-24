@@ -43,6 +43,7 @@
             <label class="row"><span>主标题</span><input v-model.trim="siteForm.site_title" /></label>
             <label class="row"><span>副标题</span><input v-model.trim="siteForm.site_subtitle" /></label>
             <label class="row"><span>站点描述</span><input v-model="siteForm.site_description" /></label>
+                <label class="row"><span>关于页副标题</span><input v-model="siteForm.about_subtitle" placeholder="留空用默认：一个会发光的角落" /></label>
           </div>
 
           <div class="card">
@@ -80,7 +81,7 @@
           </div>
 
           <div class="ops">
-            <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_html'])">
+            <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_subtitle', 'about_html'])">
               {{ saving ? '保存中…' : '保存站点设置' }}
             </button>
             <span v-if="flash" class="flash">{{ flash }}</span>
@@ -342,7 +343,7 @@ function showFlash(msg: string) {
   flashTimer = setTimeout(() => (flash.value = ''), 2600);
 }
 
-const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_html: '' });
+const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '' });
 
 /** 后端返回的邮件模板元数据（每种邮件一份：标签 / 占位符 / 内置默认） */
 interface TplMeta {
@@ -363,6 +364,8 @@ const smtpEnabled = ref(false);
 const smtpPassSet = ref(false);
 const logoUrl = ref('');
 const defaultAvatarUrl = ref('');
+// 站点/邮件设置是否已从后端加载成功；未加载前禁止保存，防止空表单覆盖线上配置。
+const settingsReady = ref(false);
 
 async function bootstrap() {
   const { data } = await adminHttp.get('/admin/settings');
@@ -370,6 +373,7 @@ async function bootstrap() {
     site_title: data.settings.site_title ?? '',
     site_subtitle: data.settings.site_subtitle ?? '',
     site_description: data.settings.site_description ?? '',
+    about_subtitle: data.settings.about_subtitle ?? '',
     about_html: data.settings.about_html ?? '',
   });
   mailTemplates.value = data.mailTemplates ?? [];
@@ -390,9 +394,14 @@ async function bootstrap() {
   smtpPassSet.value = data.settings.smtp_pass === '__KEEP__';
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
+  settingsReady.value = true;
 }
 
 async function saveSettings(keys: string[]) {
+  if (!settingsReady.value) {
+    showFlash('配置尚未加载完成，请刷新页面后再保存');
+    return;
+  }
   saving.value = true;
   try {
     const body: Record<string, unknown> = {};

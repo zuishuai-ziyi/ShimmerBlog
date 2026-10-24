@@ -2,7 +2,7 @@
   <div class="about">
     <header class="head">
       <h1 class="page-title">关于</h1>
-      <p class="muted">一个会发光的角落</p>
+      <p class="muted">{{ site.info.aboutSubtitle }}</p>
     </header>
 
     <!-- 后台配置了自定义内容时优先生效，否则展示内置介绍 -->

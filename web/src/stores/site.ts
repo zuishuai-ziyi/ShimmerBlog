@@ -10,6 +10,7 @@ export interface SiteInfo {
   logoUrl: string;
   defaultAvatarUrl: string;
   aboutHtml: string;
+  aboutSubtitle: string;
 }
 
 export const useSiteStore = defineStore('site', {
@@ -23,6 +24,7 @@ export const useSiteStore = defineStore('site', {
       logoUrl: '',
       defaultAvatarUrl: '',
       aboutHtml: '',
+      aboutSubtitle: '一个会发光的角落',
     } as SiteInfo,
     loaded: false,
   }),

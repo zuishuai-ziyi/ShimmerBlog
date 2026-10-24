@@ -41,10 +41,10 @@ async function main() {
   console.log('\n== 站点公开配置 ==');
   const site = await req('GET', '/site');
   check('GET /site 200', site.status === 200, JSON.stringify(site.data));
-  check('/site 含 title/subtitle/registerOpen/githubEnabled', ['title', 'subtitle', 'registerOpen', 'githubEnabled'].every((k) => k in site.data));
+  check('/site 含 title/subtitle/registerOpen/githubEnabled/aboutSubtitle', ['title', 'subtitle', 'registerOpen', 'githubEnabled', 'aboutSubtitle'].every((k) => k in site.data));
 
   console.log('\n== 后台鉴权 ==');
-  const adminLogin = await req('POST', '/admin/login', { body: { password: process.env.SB_ADMIN_PASSWORD || 'shimmer-admin' } });
+  const adminLogin = await req('POST', '/admin/login', { body: { password: process.env.SB_ADMIN_PASSWORD || '123456' } });
   check('管理员登录 200', adminLogin.status === 200 && !!adminLogin.data?.token, JSON.stringify(adminLogin.data));
   const adminToken = adminLogin.data?.token;
 
@@ -159,6 +159,18 @@ async function main() {
 
   const site2 = await req('GET', '/site');
   check('公开 /site 立即反映新标题', site2.data?.title === newTitle, String(site2.data?.title));
+
+  // 关于页副标题（第 43 轮，替代原页脚小字）：自定义；置空回退默认；测后还原原值
+  const beforeSub = setObj.about_subtitle ?? '';
+  const customSub = `光 · ${rnd()}`;
+  await req('PUT', '/admin/settings', { token: adminToken, body: { about_subtitle: customSub } });
+  const siteF = await req('GET', '/site');
+  check('关于页副标题自定义生效', siteF.data?.aboutSubtitle === customSub, String(siteF.data?.aboutSubtitle));
+  await req('PUT', '/admin/settings', { token: adminToken, body: { about_subtitle: '' } });
+  const siteFd = await req('GET', '/site');
+  check('关于页副标题置空回退默认', siteFd.data?.aboutSubtitle === '一个会发光的角落', String(siteFd.data?.aboutSubtitle));
+  await req('PUT', '/admin/settings', { token: adminToken, body: { about_subtitle: beforeSub } });
+  check('关于页副标题已还原测试前原值', (await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.about_subtitle === beforeSub);
 
   console.log('\n== 注册开关 ==');
   const closeReg = await req('PUT', '/admin/settings', { token: adminToken, body: { register_open: false } });

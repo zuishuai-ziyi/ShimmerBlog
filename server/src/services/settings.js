@@ -15,6 +15,7 @@ const DEFAULTS = {
   site_logo_url: '',
   default_avatar_url: '',
   about_html: '',
+  about_subtitle: '一个会发光的角落',
   mail_code_subject: '',
   mail_code_body: '',
   mail_welcome_subject: '',
@@ -166,13 +167,15 @@ export async function mailTemplate(kind, vars = {}) {
 export async function publicSiteInfo() {
   const all = await getAllSettings();
   const gh = await githubConfig();
+  const title = all.site_title;
   return {
-    title: all.site_title,
+    title,
     subtitle: all.site_subtitle,
     description: all.site_description,
     logoUrl: all.site_logo_url || '',
     defaultAvatarUrl: all.default_avatar_url || '',
     aboutHtml: all.about_html || '',
+    aboutSubtitle: all.about_subtitle || '一个会发光的角落',
     registerOpen: all.register_open === '1',
     githubEnabled: gh.enabled,
   };
