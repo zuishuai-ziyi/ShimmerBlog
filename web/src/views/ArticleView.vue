@@ -38,9 +38,14 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
+import { useSiteStore } from '../stores/site';
 import { formatDate } from '../utils/format';
 import type { Article } from '../types';
-import fallbackAvatar from '../assets/default-avatar.svg';
+import bundledAvatar from '../assets/default-avatar.svg';
+
+// 用户默认头像：后台可设置，未设置时用内置图
+const site = useSiteStore();
+const fallbackAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 
 const route = useRoute();
 const auth = useAuthStore();

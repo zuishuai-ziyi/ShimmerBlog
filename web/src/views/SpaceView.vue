@@ -51,7 +51,12 @@ import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
-import defaultAvatar from '../assets/default-avatar.svg';
+import { useSiteStore } from '../stores/site';
+import bundledAvatar from '../assets/default-avatar.svg';
+
+// 用户默认头像：后台可设置，未设置时用内置图
+const site = useSiteStore();
+const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 
 interface SpaceUser {
   id: number;

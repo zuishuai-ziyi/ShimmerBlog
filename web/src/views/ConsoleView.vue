@@ -90,14 +90,19 @@
 </template>
 
 <script setup lang="ts">
-import { onMounted, ref, watch } from 'vue';
+import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
+import { useSiteStore } from '../stores/site';
 import { formatDateTime } from '../utils/format';
 import type { ArticleBrief } from '../types';
-import defaultAvatar from '../assets/default-avatar.svg';
+import bundledAvatar from '../assets/default-avatar.svg';
 import ArticleEditor from '../components/ArticleEditor.vue';
+
+// 用户默认头像：后台可设置，未设置时用内置图
+const site = useSiteStore();
+const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 
 const tabs = [
   { key: 'articles', label: '我的文章' },

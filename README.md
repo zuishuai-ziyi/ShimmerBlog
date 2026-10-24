@@ -22,7 +22,7 @@ ShimmerBlog/
 │   │   ├── index.js        # 启动 + 未捕获异常落盘 crash.log
 │   │   ├── app.js          # 路由挂载 / 静态 / 统一错误处理
 │   │   ├── config.js       # .env 读取
-│   │   ├── db.js           # 连接池 + initDatabase()（建库建表 + 种子管理员）
+│   │   ├── db.js           # 连接池 + initDatabase()（建库建表 + 管理密码种子）
 │   │   ├── uploads.js      # multer（头像 / 文章配图）
 │   │   ├── routes/         # auth / articles / admin / site / health
 │   │   ├── middleware/     # authRequired / adminRequired
@@ -67,7 +67,7 @@ cd ../web && npm run dev
    `DB_PASSWORD='p@ss#word$1'`
 2. `JWT_SECRET` 务必改成足够长的随机串。
 
-`.env` 关键项见 `server/.env.example`：`PORT`、`JWT_SECRET`、`DB_*`、`ADMIN_*`（种子管理员）、`GITHUB_CLIENT_ID/SECRET`（可留空，后台填）、`SMTP_*`（可留空）。
+``.env` 关键项见 `server/.env.example`：`PORT`、`JWT_SECRET`、`DB_*`、`ADMIN_PASSWORD`（管理后台密码，首次启动建库时写入哈希；不设管理员邮箱，无管理员用户）、`GITHUB_CLIENT_ID/SECRET`（可留空，后台填）、`SMTP_*`（可留空）。
 
 ## 站点配置（可在后台改，不必改 .env）
 
@@ -82,6 +82,7 @@ cd ../web && npm run dev
 | `web_origin` | 第三方登录回调后跳回的前端地址（生产环境改成你的域名） |
 
 - 后台存的值优先于 `.env`；密钥字段读接口只返回掩码（`__KEEP__` 表示保持原值，`__CLEAR__` 表示清空）。
+- **站点 Logo / 用户默认头像**：后台「站点」页上传（`POST/DELETE /api/admin/logo`、`POST/DELETE /api/admin/default-avatar`）。默认头像对所有无头像用户生效（文章卡/文章页/顶栏/控制台/空间页统一回退到 `GET /api/site` 的 `defaultAvatarUrl`）；未设置时使用内置 `web/src/assets/default-avatar.svg`。
 - **GitHub OAuth**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，
   Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`），把 Client ID / Secret 填进站点配置即可。
 - **邮箱验证码**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。

@@ -56,6 +56,19 @@
             </div>
           </div>
 
+          <h2>用户默认头像</h2>
+          <div class="logo-box">
+            <img v-if="defaultAvatarUrl" :src="defaultAvatarUrl" alt="默认头像" class="logo-preview" />
+            <span v-else class="logo-empty">未设置（使用内置 default 头像）</span>
+            <div class="logo-ops">
+              <label class="file-btn">
+                上传默认头像
+                <input type="file" accept="image/*" hidden @change="uploadDefaultAvatar" />
+              </label>
+              <button v-if="defaultAvatarUrl" class="ghost danger" @click="removeDefaultAvatar">恢复内置</button>
+            </div>
+          </div>
+
           <h2>关于页面内容（HTML）</h2>
           <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
           <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
@@ -284,6 +297,7 @@ const smtpSecureBool = ref(false);
 const smtpEnabled = ref(false);
 const smtpPassSet = ref(false);
 const logoUrl = ref('');
+const defaultAvatarUrl = ref('');
 
 async function bootstrap() {
   const { data } = await adminHttp.get('/admin/settings');
@@ -307,6 +321,7 @@ async function bootstrap() {
   smtpEnabled.value = !!data.smtpEnabled;
   smtpPassSet.value = data.settings.smtp_pass === '__KEEP__';
   logoUrl.value = data.settings.site_logo_url ?? '';
+  defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
 }
 
 async function saveSettings(keys: string[]) {
@@ -353,6 +368,34 @@ async function removeLogo() {
     logoUrl.value = '';
     await refreshSite();
     showFlash('✓ 已恢复默认 Logo');
+  } catch (err) {
+    showFlash('操作失败：' + errMsg(err));
+  }
+}
+
+async function uploadDefaultAvatar(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  if (!file) return;
+  const fd = new FormData();
+  fd.append('file', file);
+  try {
+    const { data } = await adminHttp.post('/admin/default-avatar', fd);
+    defaultAvatarUrl.value = data.url;
+    await refreshSite();
+    showFlash('✓ 默认头像已更新');
+  } catch (err) {
+    showFlash('上传失败：' + errMsg(err));
+  }
+  input.value = '';
+}
+
+async function removeDefaultAvatar() {
+  try {
+    await adminHttp.delete('/admin/default-avatar');
+    defaultAvatarUrl.value = '';
+    await refreshSite();
+    showFlash('✓ 已恢复内置头像');
   } catch (err) {
     showFlash('操作失败：' + errMsg(err));
   }

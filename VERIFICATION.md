@@ -295,3 +295,17 @@
 - ConsoleView 删用户管理/站点配置区（回归纯用户面板+bio 编辑）；AboutView 改渲染后台 about_html（DOMParser 白名单净化）；TopBar 支持 logoUrl 与彩色用户名+后台入口；ArticleView 作者名彩色并链接 /space/:id；LoginView 去 .glass 改半透明深面板；App.vue 在 /admin 隐藏 StarField/TopBar。
 
 **实测**：admin login/session/未授权 401 ✓；/admin 四区渲染+用户控件+文章 8 行+置顶往返 ✓；/space/1 资料卡+8 文章+编辑昵称/简介保存回显 ✓（测试数据已还原）；文章页作者名 accent 色并链到 /space/1 ✓；/login panel rgba(10,18,28,.55) 无 backdrop ✓；`npm run build` 0 错误。
+
+## 34. 去除管理员邮箱记录与用户角色概念（用户：不再记录关联邮箱；不再使用管理员用户，"管理员"用户与普通用户无异）
+
+- `server/src/config.js`：config.admin 删除 email/name，仅保留 password（后台登录只用密码）。
+- `server/.env` / `.env.example`：删除 `ADMIN_EMAIL`/`ADMIN_NAME`，注释改为「管理后台密码（首次启动建库时写入哈希）」。
+- **彻底移除用户角色概念**：db.js users 表 schema 删 `role ENUM('user','admin')`；线上库 `ALTER TABLE users DROP COLUMN role`（临时 .mjs 幂等执行，跑完即删）；auth.js 三处注册 INSERT（密码注册/验证码首登自动注册/GitHub 首登）去 role；utils.js signToken JWT payload 去 role、publicUser 返回去 role；前端 stores/auth.ts User 接口删 role。
+- 实测：全库 grep 无残留 role/ADMIN_EMAIL/ADMIN_NAME 引用；后端重启后 admin login 200；验证码登录 E2E（临时账号 role-drop-test）token 下发、user 对象无 role 字段 ✓，测试账号已删；`/api/space/1` 用户对象无 role ✓；`npm run build` 0 错误。README 已同步。
+
+## 35. 后台可管理用户默认头像（用户 m01253）
+
+- 需求：后台可指定用户默认头像；默认使用用户提供的 `default` 图片（给了 default.png 200×200 与 default.svg 两种格式，自选）。**选用 SVG**（任意尺寸清晰、仅 1KB，前端原本就以 `<img>` 引用 SVG，兼容性无差异），已覆盖至 `web/src/assets/default-avatar.svg` 作为内置默认。
+- 后端：settings.js DEFAULTS 补齐 `site_logo_url`/`default_avatar_url`/`about_html`/`mail_*`/`smtp_*`（**修复隐患：setSettings 白名单是 `k in DEFAULTS`，此前 logo/about/smtp 键均不在 DEFAULTS 里，保存会被静默丢弃**）；publicSiteInfo 加 `defaultAvatarUrl`；admin.js 新增 `POST/DELETE /api/admin/default-avatar`（imageUpload，同 Logo 流程）。
+- 前端：site store 加 `defaultAvatarUrl`；ArticleCard/ArticleView/TopBar/SpaceView/ConsoleView 五处回退头像改为 `site.info.defaultAvatarUrl || 内置 svg`；AdminView「站点」页 Logo 区块下新增「用户默认头像」（上传/预览/恢复内置）。
+- E2E：admin 登录 → 上传 default.png → `POST /admin/default-avatar` 200（`/uploads/images/…`）→ `/api/site` 返回该 URL → 图片 200 image/png → DELETE 重置回 `""`；顺带验证 Logo 上传持久化已修复（upload → `site.logoUrl` 一致）。浏览器实测首页卡片头像 src = 内置 SVG data URI（含用户图特征 `t='1792773105904'`）；`npm run build` 1.66s 0 错误。上传的测试头像文件未删（同 Logo 流程，不影响）。

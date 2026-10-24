@@ -8,6 +8,7 @@ export interface SiteInfo {
   registerOpen: boolean;
   githubEnabled: boolean;
   logoUrl: string;
+  defaultAvatarUrl: string;
   aboutHtml: string;
 }
 
@@ -20,6 +21,7 @@ export const useSiteStore = defineStore('site', {
       registerOpen: true,
       githubEnabled: false,
       logoUrl: '',
+      defaultAvatarUrl: '',
       aboutHtml: '',
     } as SiteInfo,
     loaded: false,

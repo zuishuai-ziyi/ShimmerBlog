@@ -26,10 +26,13 @@
 <script setup lang="ts">
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
-import defaultAvatar from '../assets/default-avatar.svg';
+import { computed } from 'vue';
+import bundledAvatar from '../assets/default-avatar.svg';
 
 const auth = useAuthStore();
 const site = useSiteStore();
+// 用户默认头像：后台可设置，未设置时用内置图
+const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 </script>
 
 <style scoped>

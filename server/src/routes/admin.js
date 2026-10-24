@@ -189,6 +189,26 @@ adminRouter.delete('/logo', adminRequired, async (_req, res, next) => {
   }
 });
 
+/* ---------- 用户默认头像上传 ---------- */
+adminRouter.post('/default-avatar', adminRequired, (req, res) => {
+  imageUpload.single('file')(req, res, async (err) => {
+    if (err) return res.status(400).json({ error: err.message || '默认头像上传失败' });
+    if (!req.file) return res.status(400).json({ error: '未收到图片文件' });
+    const url = `/uploads/images/${req.file.filename}`;
+    await setSettings({ default_avatar_url: url });
+    res.json({ url });
+  });
+});
+
+adminRouter.delete('/default-avatar', adminRequired, async (_req, res, next) => {
+  try {
+    await setSettings({ default_avatar_url: '' });
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 /* ---------- 发送测试邮件 ---------- */
 adminRouter.post('/mail/test', adminRequired, async (req, res, next) => {
   try {

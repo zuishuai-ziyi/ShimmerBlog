@@ -15,10 +15,16 @@
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useRouter } from 'vue-router';
 import type { ArticleBrief } from '../types';
 import { formatDate } from '../utils/format';
-import fallbackAvatar from '../assets/default-avatar.svg';
+import { useSiteStore } from '../stores/site';
+import bundledAvatar from '../assets/default-avatar.svg';
+
+// 用户默认头像：后台可设置，未设置时用内置图
+const site = useSiteStore();
+const fallbackAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 
 const props = defineProps<{ article: ArticleBrief }>();
 const router = useRouter();
