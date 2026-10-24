@@ -36,7 +36,7 @@ onMounted(() => {
     return {
       x: Math.random() * w,
       y: fromBottom ? h + 4 : Math.random() * h,
-      r: 0.4 + Math.random() * 1.8,
+      r: 0.4 + Math.random() * 1.5,
       speed: 0.15 + Math.random() * 0.85,
       alpha: 0.25 + Math.random() * 0.75,
       phase: Math.random() * Math.PI * 2,
@@ -52,7 +52,7 @@ onMounted(() => {
     canvas.style.width = `${w}px`;
     canvas.style.height = `${h}px`;
     ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
-    const count = Math.max(90, Math.round((w * h) / 8500));
+    const count = Math.max(120, Math.round((w * h) / 2400));
     stars = Array.from({ length: count }, () => spawn(false));
   }
 

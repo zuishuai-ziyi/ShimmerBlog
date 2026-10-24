@@ -5,24 +5,26 @@
         v-for="(p, i) in paths"
         :key="`l${i}`"
         :d="p.d"
-        :style="{
-          '--ca': p.ca,
-          '--cb': p.cb,
-          animationDuration: p.dur + 's',
-          animationDelay: p.delay + 's',
-        }"
+        :style="{ '--ca': p.ca }"
         stroke-width="2"
         fill="none"
         stroke-linecap="round"
         class="curve"
       />
-      <circle
+      <path
         v-for="(p, i) in paths"
         :key="`p${i}`"
-        :cx="p.x1"
-        :cy="p.y1"
-        r="3.5"
-        class="node"
+        :d="p.d"
+        :style="{
+          strokeDasharray: `${p.dash} ${p.tlen - p.dash}`,
+          '--tlen': String(p.tlen),
+          animationDuration: p.pdur + 's',
+          animationDelay: p.delay + 's',
+        }"
+        stroke-width="2"
+        fill="none"
+        stroke-linecap="round"
+        class="pulse"
       />
     </svg>
 
@@ -56,8 +58,10 @@ type Curve = {
   x2: number;
   y2: number;
   ca: string;
-  cb: string;
-  dur: number;
+  len: number;
+  dash: number;
+  tlen: number;
+  pdur: number;
   delay: number;
 };
 const paths = ref<Curve[]>([]);
@@ -121,11 +125,12 @@ function smoothPath(points: { x: number; y: number }[]): string {
     const p1 = points[i];
     const p2 = points[i + 1];
     const p3 = points[i + 2] ?? p2;
-    // 控制点 y 夹在两端之间，避免曲线上下回抽
-    const c1y = clamp(p1.y + (p2.y - p0.y) / 6, Math.min(p1.y, p2.y), Math.max(p1.y, p2.y));
-    const c2y = clamp(p2.y - (p3.y - p1.y) / 6, Math.min(p1.y, p2.y), Math.max(p1.y, p2.y));
-    const c1x = p1.x + (p2.x - p0.x) / 6;
-    const c2x = p2.x - (p3.x - p1.x) / 6;
+    // 控制点 y 夹在两端之间，避免曲线上下回抽；张力系数 1/6 → 1/4，转折更圆滑
+    const T = 4;
+    const c1y = clamp(p1.y + (p2.y - p0.y) / T, Math.min(p1.y, p2.y), Math.max(p1.y, p2.y));
+    const c2y = clamp(p2.y - (p3.y - p1.y) / T, Math.min(p1.y, p2.y), Math.max(p1.y, p2.y));
+    const c1x = p1.x + (p2.x - p0.x) / T;
+    const c2x = p2.x - (p3.x - p1.x) / T;
     d += ` C ${f(c1x)} ${f(c1y)}, ${f(c2x)} ${f(c2y)}, ${f(p2.x)} ${f(p2.y)}`;
   }
   return d;
@@ -209,10 +214,13 @@ function measure() {
       });
     }
     const d = smoothPath([{ x: x1, y: y1 }, ...mid, { x: x2, y: y2 }]);
-    // 每条曲线自己的两色与节奏，避免整页同步呼吸
+    // 几何长度：用于脉冲恒速动画（时长 = 长度 / 速度，与线长无关地保持同一速度）
+    const tmp = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+    tmp.setAttribute('d', d);
+    const len = Math.round(tmp.getTotalLength() * 10) / 10;
+    const PULSE_SPEED = 180; // px/s：光效行进速度，所有线恒定、不受线长影响
+    const PAUSE_SECONDS = 1.2; // 光效走完后的空窗停顿，之后才重新从底部出现
     const ia = Math.floor(prand(seed, 3) * CURVE_COLORS.length);
-    let ib = Math.floor(prand(seed, 4) * CURVE_COLORS.length);
-    if (ib === ia) ib = (ib + 2) % CURVE_COLORS.length;
     list.push({
       d,
       x1,
@@ -220,8 +228,11 @@ function measure() {
       x2,
       y2,
       ca: CURVE_COLORS[ia],
-      cb: CURVE_COLORS[ib],
-      dur: 4.5 + prand(seed, 5) * 7,
+      len,
+      // 亮段约线长 45%（不设下限）；图案周期 = 线长 + 亮段 + 停顿行程：间隔盖住整条线保证严格单光效，末尾空窗即停顿
+      dash: Math.round(len * 0.45 * 10) / 10,
+      tlen: Math.round((len * 1.45 + PAUSE_SECONDS * PULSE_SPEED) * 10) / 10,
+      pdur: Math.round(((len * 1.45 + PAUSE_SECONDS * PULSE_SPEED) / PULSE_SPEED) * 100) / 100,
       delay: -prand(seed, 6) * 12,
     });
   }
@@ -292,24 +303,27 @@ onBeforeUnmount(() => {
   stroke: var(--ca, #3490bf);
   stroke-linecap: round;
   filter: drop-shadow(0 0 5px rgba(140, 198, 226, 0.4));
-  /* 每条曲线的时长/延迟由内联样式覆盖，节奏各不相同 */
-  animation: curve-tint 7s ease-in-out infinite;
+  /* 连线本身近乎透明、透明度固定不变（无呼吸动画） */
+  opacity: 0.18;
 }
 
-.node {
-  fill: var(--accent);
-  filter: drop-shadow(0 0 8px rgba(180, 218, 238, 0.9));
+/* 亮脉冲：淡色短线段沿路径自下而上匀速巡游（dashoffset 递增 = 朝路径起点 = 向上） */
+.pulse {
+  fill: none;
+  stroke: #ffffff;
+  stroke-width: 2;
+  stroke-linecap: round;
+  opacity: 0.38;
+  filter: drop-shadow(0 0 4px rgba(200, 235, 250, 0.9));
+  animation: pulse-move 6s linear infinite;
 }
 
-@keyframes curve-tint {
-  0%,
-  100% {
-    stroke: var(--ca);
-    opacity: 0.85;
+@keyframes pulse-move {
+  from {
+    stroke-dashoffset: 0;
   }
-  50% {
-    stroke: var(--cb);
-    opacity: 0.5;
+  to {
+    stroke-dashoffset: var(--tlen);
   }
 }
 
