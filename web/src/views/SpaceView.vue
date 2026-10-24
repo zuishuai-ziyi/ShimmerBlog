@@ -1,5 +1,12 @@
 <template>
   <div class="space">
+    <!-- 用户不存在（已删除/ID 无效） -->
+    <div v-if="missing" class="missing">
+      <p class="missing-title">该用户不存在</p>
+      <router-link to="/" class="missing-back">← 返回首页</router-link>
+    </div>
+
+    <template v-else>
     <!-- ======== 资料卡 ======== -->
     <section class="profile">
       <img class="big-avatar" :src="user?.avatar_url || defaultAvatar" alt="" />
@@ -43,6 +50,7 @@
       </router-link>
     </div>
     <p v-else class="empty">还没有公开的文章。</p>
+    </template>
   </div>
 </template>
 
@@ -371,5 +379,22 @@ watch(() => route.params.id, load);
   color: rgba(255, 255, 255, 0.5);
   font-size: 13.5px;
   padding: 30px 0;
+}
+.missing {
+  text-align: center;
+  padding: 90px 0 70px;
+}
+.missing-title {
+  font-size: 19px;
+  color: rgba(255, 255, 255, 0.85);
+  margin-bottom: 18px;
+}
+.missing-back {
+  color: var(--accent, #8cc6e2);
+  font-size: 14px;
+  text-decoration: none;
+}
+.missing-back:hover {
+  text-decoration: underline;
 }
 </style>

@@ -3,7 +3,7 @@
     <!-- ======== 登录门 ======== -->
     <div v-if="!admin.authed" class="gate">
       <div class="gate-card">
-        <h1>ShimmerBlog 管理后台</h1>
+        <h1><span class="grad">ShimmerBlog</span> 管理后台</h1>
         <p class="gate-sub">请输入管理密码进入</p>
         <form @submit.prevent="doLogin">
           <input
@@ -22,7 +22,7 @@
     <!-- ======== 后台主体 ======== -->
     <div v-else class="shell">
       <aside class="side">
-        <div class="side-brand">ShimmerBlog<br /><span>管理后台</span></div>
+        <div class="side-brand"><span class="grad">ShimmerBlog</span><br />管理后台</div>
         <nav>
           <button :class="{ on: tab === 'site' }" @click="tab = 'site'">站点</button>
           <button :class="{ on: tab === 'mail' }" @click="tab = 'mail'">邮件</button>
@@ -38,40 +38,46 @@
       <main class="main">
         <!-- ============ 站点 ============ -->
         <section v-if="tab === 'site'" class="pane">
-          <h2>站点信息</h2>
-          <label class="row"><span>主标题</span><input v-model.trim="siteForm.site_title" /></label>
-          <label class="row"><span>副标题</span><input v-model.trim="siteForm.site_subtitle" /></label>
-          <label class="row"><span>站点描述</span><input v-model="siteForm.site_description" /></label>
+          <div class="card">
+            <h2>站点信息</h2>
+            <label class="row"><span>主标题</span><input v-model.trim="siteForm.site_title" /></label>
+            <label class="row"><span>副标题</span><input v-model.trim="siteForm.site_subtitle" /></label>
+            <label class="row"><span>站点描述</span><input v-model="siteForm.site_description" /></label>
+          </div>
 
-          <h2>站点 Logo</h2>
-          <div class="logo-box">
-            <img v-if="logoUrl" :src="logoUrl" alt="logo" class="logo-preview" />
-            <span v-else class="logo-empty">未设置（使用默认 logo.png）</span>
-            <div class="logo-ops">
-              <label class="file-btn">
-                上传新 Logo
-                <input type="file" accept="image/*" hidden @change="uploadLogo" />
-              </label>
-              <button v-if="logoUrl" class="ghost danger" @click="removeLogo">恢复默认</button>
+          <div class="card">
+            <h2>站点 Logo</h2>
+            <div class="logo-box">
+              <img v-if="logoUrl" :src="logoUrl" alt="logo" class="logo-preview" />
+              <span v-else class="logo-empty">未设置（使用默认 logo.png）</span>
+              <div class="logo-ops">
+                <label class="file-btn">
+                  上传新 Logo
+                  <input type="file" accept="image/*" hidden @change="uploadLogo" />
+                </label>
+                <button v-if="logoUrl" class="ghost danger" @click="removeLogo">恢复默认</button>
+              </div>
+            </div>
+
+            <h2 class="mt">用户默认头像</h2>
+            <div class="logo-box">
+              <img v-if="defaultAvatarUrl" :src="defaultAvatarUrl" alt="默认头像" class="logo-preview" />
+              <span v-else class="logo-empty">未设置（使用内置 default 头像）</span>
+              <div class="logo-ops">
+                <label class="file-btn">
+                  上传默认头像
+                  <input type="file" accept="image/*" hidden @change="uploadDefaultAvatar" />
+                </label>
+                <button v-if="defaultAvatarUrl" class="ghost danger" @click="removeDefaultAvatar">恢复内置</button>
+              </div>
             </div>
           </div>
 
-          <h2>用户默认头像</h2>
-          <div class="logo-box">
-            <img v-if="defaultAvatarUrl" :src="defaultAvatarUrl" alt="默认头像" class="logo-preview" />
-            <span v-else class="logo-empty">未设置（使用内置 default 头像）</span>
-            <div class="logo-ops">
-              <label class="file-btn">
-                上传默认头像
-                <input type="file" accept="image/*" hidden @change="uploadDefaultAvatar" />
-              </label>
-              <button v-if="defaultAvatarUrl" class="ghost danger" @click="removeDefaultAvatar">恢复内置</button>
-            </div>
+          <div class="card">
+            <h2>关于页面内容（HTML）</h2>
+            <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
+            <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
           </div>
-
-          <h2>关于页面内容（HTML）</h2>
-          <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
-          <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
 
           <div class="ops">
             <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_html'])">
@@ -83,33 +89,62 @@
 
         <!-- ============ 邮件 ============ -->
         <section v-if="tab === 'mail'" class="pane">
-          <h2>验证码邮件模板</h2>
-          <label class="row"><span>邮件主题</span><input v-model.trim="mailForm.mail_code_subject" /></label>
-          <label class="body-row"><span>邮件正文</span>
-            <textarea v-model="mailForm.mail_code_body" class="ta mono" rows="6" spellcheck="false" />
-          </label>
-          <p class="hint">正文中使用 <code>{code}</code> 占位符，发送时替换为 6 位验证码。</p>
+          <div class="card">
+            <h2>邮件模板</h2>
+            <p class="hint">所有系统邮件的主题与正文均可自定义，留空使用内置默认；点击占位符可插入到正文光标处。</p>
 
-          <h2>SMTP 发信配置</h2>
-          <p class="hint" :class="{ ok: smtpEnabled }">{{ smtpEnabled ? '● 已配置' : '○ 未配置（将无法发送验证码邮件）' }}</p>
-          <div class="grid">
-            <label class="row"><span>SMTP 主机</span><input v-model.trim="mailForm.smtp_host" placeholder="smtp.example.com" /></label>
-            <label class="row"><span>端口</span><input v-model.trim="mailForm.smtp_port" placeholder="465" /></label>
-            <label class="row"><span>发件人</span><input v-model.trim="mailForm.smtp_from" placeholder="ShimmerBlog &lt;no-reply@example.com&gt;" /></label>
-            <label class="row"><span>账号</span><input v-model.trim="mailForm.smtp_user" /></label>
-            <label class="row"><span>密码/授权码</span><input v-model="mailForm.smtp_pass" type="password" :placeholder="smtpPassSet ? '已配置，留空保持不变' : '未配置'" /></label>
-            <label class="row check"><input type="checkbox" v-model="smtpSecureBool" /><span>SSL/TLS（465 端口通常勾选）</span></label>
+            <div v-for="t in mailTemplates" :key="t.kind" class="tpl">
+              <div class="tpl-head">
+                <div>
+                  <div class="tpl-name">{{ t.label }}</div>
+                  <div class="tpl-desc">{{ t.desc }}</div>
+                </div>
+                <button class="ghost sm" type="button" @click="resetTpl(t)">恢复默认</button>
+              </div>
+              <label class="row"><span>主题</span><input v-model="mailForm[t.subjectKey]" :placeholder="'默认：' + t.defaultSubject" /></label>
+              <div class="body-row"><span>正文</span>
+                <textarea
+                  :ref="(el) => setBodyRef(t.kind, el)"
+                  v-model="mailForm[t.bodyKey]"
+                  class="ta mono"
+                  rows="5"
+                  spellcheck="false"
+                  :placeholder="'默认：' + t.defaultBody"
+                />
+              </div>
+              <div class="ph-row">
+                <span class="ph-label">占位符</span>
+                <button v-for="p in t.placeholders" :key="p" type="button" class="ph-chip" @click="insertPh(t, p)">{{ p }}</button>
+              </div>
+            </div>
           </div>
 
-          <h2>发送测试邮件</h2>
-          <div class="row send-row">
-            <input v-model.trim="testTo" placeholder="接收邮箱" />
-            <button class="ghost" :disabled="testing" @click="sendTest">{{ testing ? '发送中…' : '发送' }}</button>
+          <div class="card">
+            <h2>SMTP 发信配置</h2>
+            <p class="hint status" :class="{ ok: smtpEnabled }">{{ smtpEnabled ? '● 已配置，可以发信' : '○ 未配置（将无法发送任何邮件）' }}</p>
+            <div class="grid">
+              <label class="row"><span>SMTP 主机</span><input v-model.trim="mailForm.smtp_host" placeholder="smtp.example.com" /></label>
+              <label class="row"><span>端口</span><input v-model.trim="mailForm.smtp_port" placeholder="465" /></label>
+              <label class="row"><span>发件人</span><input v-model.trim="mailForm.smtp_from" placeholder="ShimmerBlog &lt;no-reply@example.com&gt;" /></label>
+              <p class="hint">发件人必须包含邮箱地址，推荐格式：<code>名称 &lt;邮箱&gt;</code>；只填名称会导致外域邮箱拒收（信封无地址）。</p>
+              <label class="row"><span>账号</span><input v-model.trim="mailForm.smtp_user" /></label>
+              <label class="row"><span>密码/授权码</span><input v-model="mailForm.smtp_pass" type="password" :placeholder="smtpPassSet ? '已配置，留空保持不变' : '未配置'" /></label>
+              <label class="row check"><input type="checkbox" v-model="smtpSecureBool" /><span>SSL/TLS（465 端口通常勾选）</span></label>
+            </div>
           </div>
-          <p v-if="testResult" class="hint" :class="{ ok: testOk }">{{ testResult }}</p>
+
+          <div class="card">
+            <h2>发送测试邮件</h2>
+            <p class="hint">使用「测试邮件」模板向指定邮箱发一封真实邮件，验证 SMTP 配置。</p>
+            <div class="row send-row">
+              <input v-model.trim="testTo" placeholder="接收邮箱" />
+              <button class="ghost" :disabled="testing" @click="sendTest">{{ testing ? '发送中…' : '发送' }}</button>
+            </div>
+            <p v-if="testResult" class="hint" :class="{ ok: testOk }">{{ testResult }}</p>
+          </div>
 
           <div class="ops">
-            <button class="primary" :disabled="saving" @click="saveSettings(['mail_code_subject', 'mail_code_body', 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass', 'smtp_secure'])">
+            <button class="primary" :disabled="saving" @click="saveMailSettings">
               {{ saving ? '保存中…' : '保存邮件设置' }}
             </button>
             <span v-if="flash" class="flash">{{ flash }}</span>
@@ -118,80 +153,90 @@
 
         <!-- ============ 用户 ============ -->
         <section v-if="tab === 'users'" class="pane">
-          <div class="list-head">
-            <h2>用户管理 <small>{{ userTotal }} 人</small></h2>
-            <input v-model.trim="userQuery" class="search" placeholder="搜索邮箱 / 昵称…" @input="searchUsers" />
+          <div class="card">
+            <div class="list-head">
+              <h2>用户管理 <small>{{ userTotal }} 人</small></h2>
+              <input v-model.trim="userQuery" class="search" placeholder="搜索邮箱 / 昵称…" @input="searchUsers" />
+            </div>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead>
+                  <tr><th>ID</th><th>用户</th><th>名称颜色</th><th>权限</th><th>状态</th><th>注册时间</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="u in users" :key="u.id">
+                    <td class="dim">{{ u.id }}</td>
+                    <td>
+                      <div class="cell-user">
+                        <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
+                        <div>
+                          <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
+                          <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template></div>
+                        </div>
+                      </div>
+                    </td>
+                    <td>
+                      <div class="color-cell">
+                        <input type="color" :value="toHex6(u.name_color)" @input="setColor(u, $event)" />
+                        <code class="dim">{{ u.name_color || '默认' }}</code>
+                      </div>
+                    </td>
+                    <td>
+                      <label class="perm"><input type="checkbox" :checked="hasPerm(u, 'post')" @change="setPerm(u, 'post', $event)" />发布文章</label>
+                    </td>
+                    <td>
+                      <button class="pill" :class="u.status" @click="toggleStatus(u)">
+                        {{ u.status === 'active' ? '正常' : '已禁用' }}
+                      </button>
+                    </td>
+                    <td class="dim">{{ fmtDate(u.created_at) }}</td>
+                    <td class="row-ops">
+                      <a class="ghost sm" :href="`/space/${u.id}`" target="_blank">空间</a>
+                      <button class="ghost sm" @click="openEdit(u)">编辑</button>
+                      <button class="ghost sm danger" @click="removeUser(u)">删除</button>
+                    </td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-if="!users.length" class="hint">没有匹配的用户。</p>
           </div>
-          <table class="tbl">
-            <thead>
-              <tr><th>ID</th><th>用户</th><th>名称颜色</th><th>权限</th><th>状态</th><th>注册时间</th><th></th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="u in users" :key="u.id">
-                <td class="dim">{{ u.id }}</td>
-                <td>
-                  <div class="cell-user">
-                    <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
-                    <div>
-                      <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
-                      <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template></div>
-                    </div>
-                  </div>
-                </td>
-                <td>
-                  <div class="color-cell">
-                    <input type="color" :value="toHex6(u.name_color)" @input="setColor(u, $event)" />
-                    <code class="dim">{{ u.name_color || '默认' }}</code>
-                  </div>
-                </td>
-                <td>
-                  <label class="perm"><input type="checkbox" :checked="hasPerm(u, 'post')" @change="setPerm(u, 'post', $event)" />发布文章</label>
-                </td>
-                <td>
-                  <button class="pill" :class="u.status" @click="toggleStatus(u)">
-                    {{ u.status === 'active' ? '正常' : '已禁用' }}
-                  </button>
-                </td>
-                <td class="dim">{{ fmtDate(u.created_at) }}</td>
-                <td>
-                  <a class="ghost sm" :href="`/space/${u.id}`" target="_blank">空间</a>
-                </td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="!users.length" class="hint">没有匹配的用户。</p>
         </section>
 
         <!-- ============ 文章 ============ -->
         <section v-if="tab === 'articles'" class="pane">
-          <div class="list-head">
-            <h2>文章管理 <small>{{ articleTotal }} 篇（含草稿）</small></h2>
-            <input v-model.trim="articleQuery" class="search" placeholder="搜索标题…" @input="searchArticles" />
+          <div class="card">
+            <div class="list-head">
+              <h2>文章管理 <small>{{ articleTotal }} 篇（含草稿）</small></h2>
+              <input v-model.trim="articleQuery" class="search" placeholder="搜索标题…" @input="searchArticles" />
+            </div>
+            <div class="tbl-wrap">
+              <table class="tbl">
+                <thead>
+                  <tr><th>ID</th><th>标题</th><th>作者</th><th>状态</th><th>置顶</th><th>更新时间</th><th></th></tr>
+                </thead>
+                <tbody>
+                  <tr v-for="a in articles" :key="a.id">
+                    <td class="dim">{{ a.id }}</td>
+                    <td class="title-cell"><a :href="`/article/${a.id}`" target="_blank">{{ a.title }}</a></td>
+                    <td>
+                      <span :style="a.author_name_color ? { color: a.author_name_color } : undefined">{{ a.author_name }}</span>
+                      <small v-if="a.status === 'draft'" class="dim"> · 草稿</small>
+                    </td>
+                    <td><span class="pill" :class="a.status">{{ a.status === 'published' ? '已发布' : '草稿' }}</span></td>
+                    <td>
+                      <button class="pill" :class="{ pinned: !!a.pinned }" @click="togglePin(a)">
+                        {{ a.pinned ? '已置顶' : '未置顶' }}
+                      </button>
+                    </td>
+                    <td class="dim">{{ fmtDate(a.updated_at) }}</td>
+                    <td><button class="ghost sm danger" @click="deleteArticle(a)">删除</button></td>
+                  </tr>
+                </tbody>
+              </table>
+            </div>
+            <p v-if="!articles.length" class="hint">没有匹配的文章。</p>
           </div>
-          <table class="tbl">
-            <thead>
-              <tr><th>ID</th><th>标题</th><th>作者</th><th>状态</th><th>置顶</th><th>更新时间</th><th></th></tr>
-            </thead>
-            <tbody>
-              <tr v-for="a in articles" :key="a.id">
-                <td class="dim">{{ a.id }}</td>
-                <td class="title-cell"><a :href="`/article/${a.id}`" target="_blank">{{ a.title }}</a></td>
-                <td>
-                  <span :style="a.author_name_color ? { color: a.author_name_color } : undefined">{{ a.author_name }}</span>
-                  <small v-if="a.status === 'draft'" class="dim"> · 草稿</small>
-                </td>
-                <td><span class="pill" :class="a.status">{{ a.status === 'published' ? '已发布' : '草稿' }}</span></td>
-                <td>
-                  <button class="pill" :class="{ pinned: !!a.pinned }" @click="togglePin(a)">
-                    {{ a.pinned ? '已置顶' : '未置顶' }}
-                  </button>
-                </td>
-                <td class="dim">{{ fmtDate(a.updated_at) }}</td>
-                <td><button class="ghost sm danger" @click="deleteArticle(a)">删除</button></td>
-              </tr>
-            </tbody>
-          </table>
-          <p v-if="!articles.length" class="hint">没有匹配的文章。</p>
         </section>
       </main>
     </div>
@@ -206,6 +251,21 @@
           <button class="primary" :disabled="saving" @click="savePwd">保存</button>
         </div>
         <p v-if="pwdMsg" class="hint" :class="{ ok: pwdOk }">{{ pwdMsg }}</p>
+      </div>
+    </div>
+    <!-- 编辑用户弹层 -->
+    <div v-if="editOpen" class="modal-mask" @click.self="editOpen = false">
+      <div class="modal">
+        <h3>编辑用户</h3>
+        <input v-model.trim="editForm.name" placeholder="昵称" />
+        <input v-model.trim="editForm.email" placeholder="绑定邮箱" />
+        <input v-model="editForm.password" type="password" placeholder="新密码（留空不改）" />
+        <p class="hint">改邮箱后用户需重新验证（验证码登录即可完成）。</p>
+        <div class="modal-ops">
+          <button class="ghost" @click="editOpen = false">取消</button>
+          <button class="primary" @click="saveEdit">保存</button>
+        </div>
+        <p v-if="editMsg" class="hint">{{ editMsg }}</p>
       </div>
     </div>
   </div>
@@ -283,16 +343,21 @@ function showFlash(msg: string) {
 }
 
 const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_html: '' });
-const mailForm = reactive({
-  mail_code_subject: '',
-  mail_code_body: '',
-  smtp_host: '',
-  smtp_port: '',
-  smtp_from: '',
-  smtp_user: '',
-  smtp_pass: '',
-  smtp_secure: '',
-});
+
+/** 后端返回的邮件模板元数据（每种邮件一份：标签 / 占位符 / 内置默认） */
+interface TplMeta {
+  kind: string;
+  label: string;
+  desc: string;
+  placeholders: string[];
+  subjectKey: string;
+  bodyKey: string;
+  defaultSubject: string;
+  defaultBody: string;
+}
+
+const mailTemplates = ref<TplMeta[]>([]);
+const mailForm = reactive<Record<string, string>>({});
 const smtpSecureBool = ref(false);
 const smtpEnabled = ref(false);
 const smtpPassSet = ref(false);
@@ -307,9 +372,12 @@ async function bootstrap() {
     site_description: data.settings.site_description ?? '',
     about_html: data.settings.about_html ?? '',
   });
+  mailTemplates.value = data.mailTemplates ?? [];
+  for (const t of mailTemplates.value) {
+    mailForm[t.subjectKey] = data.settings[t.subjectKey] ?? '';
+    mailForm[t.bodyKey] = data.settings[t.bodyKey] ?? '';
+  }
   Object.assign(mailForm, {
-    mail_code_subject: data.settings.mail_code_subject ?? '',
-    mail_code_body: data.settings.mail_code_body ?? '',
     smtp_host: data.settings.smtp_host ?? '',
     smtp_port: data.settings.smtp_port ?? '',
     smtp_from: data.settings.smtp_from ?? '',
@@ -328,7 +396,7 @@ async function saveSettings(keys: string[]) {
   saving.value = true;
   try {
     const body: Record<string, unknown> = {};
-    for (const k of keys) body[k] = (siteForm as Record<string, unknown>)[k] ?? (mailForm as Record<string, unknown>)[k];
+    for (const k of keys) body[k] = (siteForm as Record<string, unknown>)[k] ?? mailForm[k];
     body.smtp_secure = smtpSecureBool.value;
     const { data } = await adminHttp.put('/admin/settings', body);
     smtpEnabled.value = !!data.smtpEnabled;
@@ -339,6 +407,41 @@ async function saveSettings(keys: string[]) {
   } finally {
     saving.value = false;
   }
+}
+
+async function saveMailSettings() {
+  const keys = mailTemplates.value.flatMap((t) => [t.subjectKey, t.bodyKey]);
+  await saveSettings([...keys, 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass']);
+}
+
+/* ---- 邮件模板编辑：占位符插入 / 恢复默认 ---- */
+const bodyRefs = new Map<string, HTMLTextAreaElement>();
+
+function setBodyRef(kind: string, el: unknown) {
+  if (el instanceof HTMLTextAreaElement) bodyRefs.set(kind, el);
+  else bodyRefs.delete(kind);
+}
+
+function insertPh(t: TplMeta, ph: string) {
+  const ta = bodyRefs.get(t.kind);
+  const v = String(mailForm[t.bodyKey] ?? '');
+  if (!ta) {
+    mailForm[t.bodyKey] = v + ph;
+    return;
+  }
+  const s = ta.selectionStart ?? v.length;
+  const e = ta.selectionEnd ?? s;
+  mailForm[t.bodyKey] = v.slice(0, s) + ph + v.slice(e);
+  requestAnimationFrame(() => {
+    ta.focus();
+    ta.selectionStart = ta.selectionEnd = s + ph.length;
+  });
+}
+
+function resetTpl(t: TplMeta) {
+  mailForm[t.subjectKey] = '';
+  mailForm[t.bodyKey] = '';
+  showFlash(`「${t.label}」已还原为默认内容，保存后生效`);
 }
 
 async function refreshSite() {
@@ -493,6 +596,54 @@ function toggleStatus(u: AdminUser) {
   patchUser(u, { status: u.status === 'active' ? 'disabled' : 'active' });
 }
 
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const editOpen = ref(false);
+const editTarget = ref<AdminUser | null>(null);
+const editForm = reactive({ name: '', email: '', password: '' });
+const editMsg = ref('');
+
+function openEdit(u: AdminUser) {
+  editTarget.value = u;
+  editForm.name = u.name;
+  editForm.email = u.email ?? '';
+  editForm.password = '';
+  editMsg.value = '';
+  editOpen.value = true;
+}
+
+async function saveEdit() {
+  const u = editTarget.value;
+  if (!u) return;
+  if (!editForm.name.trim()) { editMsg.value = '昵称不能为空'; return; }
+  if (editForm.email && !EMAIL_RE.test(editForm.email)) { editMsg.value = '邮箱格式不正确'; return; }
+  if (editForm.password && editForm.password.length < 6) { editMsg.value = '新密码至少 6 位'; return; }
+  const body: Record<string, unknown> = {};
+  if (editForm.name.trim() !== u.name) body.name = editForm.name.trim();
+  if (editForm.email !== (u.email ?? '')) body.email = editForm.email;
+  if (editForm.password) body.password = editForm.password;
+  if (!Object.keys(body).length) { editOpen.value = false; return; }
+  try {
+    const { data } = await adminHttp.patch(`/admin/users/${u.id}`, body);
+    Object.assign(u, data.user);
+    editOpen.value = false;
+    showFlash(`✓ 已更新「${u.name}」`);
+  } catch (e) {
+    editMsg.value = errMsg(e);
+  }
+}
+
+async function removeUser(u: AdminUser) {
+  const what = `${u.name}（${u.email ?? '无邮箱'}）`;
+  if (!confirm(`确定删除用户「${what}」？\n删除后该用户的所有信息将被清除，其文章将一并删除，且不可恢复。`)) return;
+  try {
+    await adminHttp.delete(`/admin/users/${u.id}`);
+    users.value = users.value.filter((x) => x.id !== u.id);
+    showFlash(`已删除「${what}」`);
+  } catch (e) {
+    showFlash('删除失败：' + errMsg(e));
+  }
+}
+
 /* ---- 文章管理 ---- */
 interface AdminArticle {
   id: number;
@@ -563,12 +714,34 @@ onMounted(async () => {
 </script>
 
 <style scoped>
-/* 独立后台风格：冷石墨深色面板 + 琥珀强调，刻意区别于前台星空蓝 */
+/* 独立后台风格：白蓝配色 —— 冷白面板 + 湛蓝强调，与前台星空深蓝呼应但更轻盈 */
 .admin {
+  --bg: #f4f7fc;
+  --surface: #ffffff;
+  --border: #e4eaf4;
+  --border-strong: #d5deed;
+  --text-1: #16233f;
+  --text-2: #46566f;
+  --text-3: #8593ab;
+  --blue: #2563eb;
+  --blue-deep: #1d4ed8;
+  --blue-soft: #eef4ff;
+  --ring: rgba(37, 99, 235, 0.14);
+  --green: #15803d;
+  --green-soft: #edfaf2;
+  --red: #d3384a;
+  --red-soft: #fdf1f3;
   min-height: 100vh;
-  background: #12151a;
-  color: #e7e9ee;
+  background: var(--bg);
+  color: var(--text-1);
   font-size: 14px;
+}
+
+.grad {
+  background: linear-gradient(115deg, #2563eb 10%, #38bdf8 90%);
+  -webkit-background-clip: text;
+  background-clip: text;
+  color: transparent;
 }
 
 /* 登录门 */
@@ -577,42 +750,31 @@ onMounted(async () => {
   display: flex;
   align-items: center;
   justify-content: center;
-  background: radial-gradient(1200px 600px at 50% -10%, #1b2027 0%, #12151a 60%);
+  background:
+    radial-gradient(900px 460px at 14% -10%, rgba(37, 99, 235, 0.13), transparent 62%),
+    radial-gradient(760px 420px at 88% 110%, rgba(56, 189, 248, 0.12), transparent 60%),
+    linear-gradient(180deg, #f7faff 0%, #edf3fc 100%);
 }
 
 .gate-card {
-  width: min(380px, calc(100vw - 40px));
-  padding: 34px 32px;
-  background: #191d24;
-  border: 1px solid #262c36;
-  border-radius: 14px;
+  width: min(400px, calc(100vw - 40px));
+  padding: 40px 36px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 18px;
+  box-shadow: 0 24px 60px -24px rgba(23, 43, 99, 0.28);
 }
 
 .gate-card h1 {
-  font-size: 19px;
-  margin: 0 0 6px;
-  color: #f2b34c;
+  font-size: 21px;
+  margin: 0 0 8px;
+  color: var(--text-1);
+  letter-spacing: 0.2px;
 }
 
 .gate-sub {
-  margin: 0 0 20px;
-  color: #8a93a3;
-}
-
-.gate-card input {
-  width: 100%;
-  box-sizing: border-box;
-  padding: 11px 13px;
-  background: #12151a;
-  border: 1px solid #2c333f;
-  border-radius: 9px;
-  color: #e7e9ee;
-  font-size: 14px;
-  outline: none;
-}
-
-.gate-card input:focus {
-  border-color: #f2b34c;
+  margin: 0 0 24px;
+  color: var(--text-3);
 }
 
 .gate-card form {
@@ -621,26 +783,57 @@ onMounted(async () => {
   gap: 12px;
 }
 
-.gate-card button {
-  padding: 11px 0;
-  border: 0;
-  border-radius: 9px;
-  background: #f2b34c;
-  color: #1a1508;
-  font-weight: 700;
+.gate-card input {
+  width: 100%;
+  box-sizing: border-box;
+  padding: 12px 14px;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 10px;
+  color: var(--text-1);
   font-size: 14px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.gate-card input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: #fff;
+}
+
+.gate-card button {
+  padding: 12px 0;
+  border: 0;
+  border-radius: 10px;
+  background: linear-gradient(180deg, #3574f2, var(--blue));
+  color: #fff;
+  font-weight: 600;
+  font-size: 14px;
+  letter-spacing: 2px;
+  cursor: pointer;
+  box-shadow: 0 8px 18px -8px rgba(37, 99, 235, 0.55);
+  transition: background 0.15s, transform 0.1s;
+}
+
+.gate-card button:hover {
+  background: linear-gradient(180deg, #2c69e6, var(--blue-deep));
+}
+
+.gate-card button:active {
+  transform: translateY(1px);
 }
 
 .gate-err {
-  color: #ff7b72;
+  color: var(--red);
   font-size: 13px;
-  margin: 12px 0 0;
+  margin: 14px 0 0;
 }
 
 .gate-hint {
-  color: #66707f;
+  color: var(--text-3);
   font-size: 12.5px;
-  margin: 14px 0 0;
+  margin: 16px 0 0;
 }
 
 /* 主体布局 */
@@ -650,14 +843,14 @@ onMounted(async () => {
 }
 
 .side {
-  width: 200px;
+  width: 212px;
   flex: none;
-  padding: 26px 16px;
-  background: #171b21;
-  border-right: 1px solid #232935;
+  padding: 28px 16px 22px;
+  background: var(--surface);
+  border-right: 1px solid var(--border);
   display: flex;
   flex-direction: column;
-  gap: 22px;
+  gap: 26px;
   position: sticky;
   top: 0;
   height: 100vh;
@@ -667,14 +860,23 @@ onMounted(async () => {
 .side-brand {
   font-size: 16px;
   font-weight: 700;
-  color: #f2b34c;
+  color: var(--text-1);
   line-height: 1.5;
+  padding: 0 8px;
 }
 
 .side-brand span {
-  font-size: 12px;
-  font-weight: 400;
-  color: #8a93a3;
+  font-size: 17px;
+}
+
+.side-brand::after {
+  content: '';
+  display: block;
+  width: 28px;
+  height: 3px;
+  margin-top: 10px;
+  border-radius: 2px;
+  background: linear-gradient(90deg, var(--blue), #38bdf8);
 }
 
 .side nav {
@@ -687,20 +889,23 @@ onMounted(async () => {
   text-align: left;
   padding: 10px 14px;
   border: 0;
-  border-radius: 8px;
+  border-radius: 9px;
   background: transparent;
-  color: #aab3c2;
+  color: var(--text-2);
   font-size: 14px;
   cursor: pointer;
-}
-
-.side nav button.on {
-  background: #232a35;
-  color: #f2b34c;
+  transition: background 0.15s, color 0.15s;
 }
 
 .side nav button:hover {
-  color: #e7e9ee;
+  background: #f2f6fd;
+  color: var(--text-1);
+}
+
+.side nav button.on {
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-weight: 600;
 }
 
 .side-foot {
@@ -712,37 +917,71 @@ onMounted(async () => {
 
 .main {
   flex: 1;
-  padding: 34px 42px 60px;
-  max-width: 980px;
+  padding: 36px 46px 64px;
+  max-width: 1020px;
+  box-sizing: border-box;
 }
 
-.pane h2 {
+/* 卡片 */
+.card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 14px;
+  padding: 24px 28px 26px;
+  margin-bottom: 18px;
+  box-shadow: 0 1px 2px rgba(23, 43, 99, 0.04);
+}
+
+.card h2,
+.pane > .card .list-head h2 {
   font-size: 15px;
-  color: #f2b34c;
-  margin: 28px 0 12px;
+  font-weight: 600;
+  color: var(--text-1);
+  margin: 0 0 16px;
+  display: flex;
+  align-items: center;
+  gap: 10px;
 }
 
-.pane h2:first-child {
-  margin-top: 0;
+.card h2::before {
+  content: '';
+  width: 4px;
+  height: 15px;
+  border-radius: 2px;
+  background: linear-gradient(180deg, var(--blue), #5ea0ff);
+  flex: none;
 }
 
-.pane h2 small {
-  color: #8a93a3;
+.card h2.mt {
+  margin-top: 26px;
+}
+
+.card h2 small {
+  color: var(--text-3);
   font-weight: 400;
   font-size: 12.5px;
 }
 
+.card .hint {
+  margin-top: -6px;
+}
+
+/* 表单行 */
 .row {
   display: flex;
   align-items: center;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
+}
+
+.row:last-child {
+  margin-bottom: 0;
 }
 
 .row > span {
-  width: 110px;
+  width: 100px;
   flex: none;
-  color: #8a93a3;
+  color: var(--text-3);
   font-size: 13px;
 }
 
@@ -751,17 +990,29 @@ onMounted(async () => {
 .row input[type='password'],
 .row input[type='email'] {
   flex: 1;
+  min-width: 0;
   padding: 9px 12px;
-  background: #12151a;
-  border: 1px solid #2c333f;
-  border-radius: 8px;
-  color: #e7e9ee;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
   font-size: 13.5px;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
-.row input:focus {
-  border-color: #f2b34c;
+.row input::placeholder,
+.ta::placeholder,
+.search::placeholder {
+  color: #a9b4c6;
+}
+
+.row input:focus,
+.ta:focus,
+.search:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: #fff;
 }
 
 .row.check {
@@ -770,6 +1021,7 @@ onMounted(async () => {
 
 .row.check span {
   width: auto;
+  color: var(--text-2);
 }
 
 .grid {
@@ -781,15 +1033,15 @@ onMounted(async () => {
 .body-row {
   display: flex;
   gap: 12px;
-  margin-bottom: 10px;
+  margin-bottom: 12px;
 }
 
 .body-row > span {
-  width: 110px;
+  width: 100px;
   flex: none;
-  color: #8a93a3;
+  color: var(--text-3);
   font-size: 13px;
-  padding-top: 9px;
+  padding-top: 10px;
 }
 
 .ta {
@@ -797,18 +1049,15 @@ onMounted(async () => {
   width: 100%;
   box-sizing: border-box;
   padding: 10px 12px;
-  background: #12151a;
-  border: 1px solid #2c333f;
-  border-radius: 8px;
-  color: #e7e9ee;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
   font-size: 13px;
   line-height: 1.7;
   outline: none;
   resize: vertical;
-}
-
-.ta:focus {
-  border-color: #f2b34c;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
 }
 
 .mono {
@@ -816,74 +1065,156 @@ onMounted(async () => {
 }
 
 .hint {
-  color: #66707f;
+  color: var(--text-3);
   font-size: 12.5px;
-  margin: 6px 0 12px;
+  margin: 6px 0 14px;
 }
 
 .hint.ok {
-  color: #7ec699;
+  color: var(--green);
+}
+
+.hint.status {
+  margin-top: -8px;
 }
 
 .hint code {
-  color: #f2b34c;
+  color: var(--blue);
+  background: var(--blue-soft);
+  border-radius: 5px;
+  padding: 1px 6px;
 }
 
 .ops {
   display: flex;
   align-items: center;
   gap: 14px;
-  margin-top: 26px;
+  margin-top: 22px;
 }
 
 .primary {
-  padding: 10px 22px;
+  padding: 10px 24px;
   border: 0;
-  border-radius: 8px;
-  background: #f2b34c;
-  color: #1a1508;
-  font-weight: 700;
+  border-radius: 9px;
+  background: linear-gradient(180deg, #3574f2, var(--blue));
+  color: #fff;
+  font-weight: 600;
   font-size: 13.5px;
   cursor: pointer;
+  box-shadow: 0 8px 18px -8px rgba(37, 99, 235, 0.5);
+  transition: background 0.15s;
+}
+
+.primary:hover {
+  background: linear-gradient(180deg, #2c69e6, var(--blue-deep));
 }
 
 .primary:disabled {
   opacity: 0.6;
+  cursor: default;
 }
 
 .ghost {
   padding: 8px 14px;
-  border: 1px solid #2c333f;
-  border-radius: 8px;
-  background: transparent;
-  color: #aab3c2;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  background: var(--surface);
+  color: var(--text-2);
   font-size: 13px;
   cursor: pointer;
   text-decoration: none;
+  transition: color 0.15s, border-color 0.15s, background 0.15s;
 }
 
 .ghost:hover {
-  color: #e7e9ee;
-  border-color: #3a4351;
+  color: var(--blue);
+  border-color: #a9c4f7;
+  background: #f7faff;
 }
 
 .ghost.sm {
-  padding: 4px 10px;
+  padding: 4px 11px;
   font-size: 12.5px;
+  border-radius: 8px;
 }
 
 .ghost.danger {
-  color: #ff7b72;
-  border-color: rgba(255, 123, 114, 0.35);
+  color: var(--red);
+  border-color: rgba(211, 56, 74, 0.35);
 }
 
 .ghost.danger:hover {
-  border-color: #ff7b72;
+  color: var(--red);
+  border-color: var(--red);
+  background: var(--red-soft);
 }
 
 .flash {
-  color: #7ec699;
+  color: var(--green);
   font-size: 13px;
+}
+
+/* 邮件模板卡片 */
+.tpl {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px 18px 14px;
+  margin-bottom: 14px;
+  background: #fcfdff;
+}
+
+.tpl:last-child {
+  margin-bottom: 0;
+}
+
+.tpl-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tpl-name {
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--text-1);
+}
+
+.tpl-desc {
+  font-size: 12px;
+  color: var(--text-3);
+  margin-top: 2px;
+}
+
+.ph-row {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 2px;
+}
+
+.ph-label {
+  font-size: 12px;
+  color: var(--text-3);
+}
+
+.ph-chip {
+  padding: 2px 10px;
+  border: 1px solid #c4d5f5;
+  border-radius: 999px;
+  background: var(--blue-soft);
+  color: var(--blue);
+  font-size: 12px;
+  font-family: ui-monospace, Consolas, monospace;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.ph-chip:hover {
+  background: #dfeaff;
+  border-color: #9db9f7;
 }
 
 /* Logo */
@@ -892,21 +1223,23 @@ onMounted(async () => {
   align-items: center;
   gap: 18px;
   padding: 14px 16px;
-  background: #171b21;
-  border: 1px solid #232935;
-  border-radius: 10px;
+  background: #f8fafd;
+  border: 1px solid var(--border);
+  border-radius: 12px;
 }
 
 .logo-preview {
   width: 46px;
   height: 46px;
   object-fit: contain;
-  border-radius: 8px;
-  background: #12151a;
+  border-radius: 9px;
+  background: #fff;
+  border: 1px solid var(--border);
+  padding: 3px;
 }
 
 .logo-empty {
-  color: #66707f;
+  color: var(--text-3);
   font-size: 13px;
 }
 
@@ -918,19 +1251,26 @@ onMounted(async () => {
 
 .file-btn {
   padding: 8px 14px;
-  border: 1px dashed #3a4351;
-  border-radius: 8px;
-  color: #aab3c2;
+  border: 1px dashed #b3c4e2;
+  border-radius: 9px;
+  color: var(--text-2);
   font-size: 13px;
   cursor: pointer;
+  background: #fff;
+  transition: color 0.15s, border-color 0.15s;
 }
 
 .file-btn:hover {
-  color: #e7e9ee;
+  color: var(--blue);
+  border-color: var(--blue);
 }
 
 .send-row {
-  max-width: 420px;
+  max-width: 440px;
+}
+
+.send-row input {
+  background: #fff;
 }
 
 /* 列表 */
@@ -939,22 +1279,27 @@ onMounted(async () => {
   align-items: center;
   justify-content: space-between;
   gap: 16px;
-  margin-bottom: 16px;
+  margin-bottom: 14px;
+}
+
+.list-head h2 {
+  margin-bottom: 0 !important;
 }
 
 .search {
   width: 240px;
   padding: 8px 12px;
-  background: #12151a;
-  border: 1px solid #2c333f;
-  border-radius: 8px;
-  color: #e7e9ee;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
   font-size: 13px;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
 }
 
-.search:focus {
-  border-color: #f2b34c;
+.tbl-wrap {
+  overflow-x: auto;
 }
 
 .tbl {
@@ -965,25 +1310,44 @@ onMounted(async () => {
 .tbl th {
   text-align: left;
   font-size: 12px;
-  color: #66707f;
+  color: var(--text-3);
   font-weight: 500;
-  padding: 8px 10px;
-  border-bottom: 1px solid #232935;
+  padding: 9px 10px;
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
 }
 
 .tbl td {
-  padding: 10px;
-  border-bottom: 1px solid #1d222b;
+  padding: 11px 10px;
+  border-bottom: 1px solid #f0f4fa;
   vertical-align: middle;
+}
+.row-ops {
+  white-space: nowrap;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.tbl tbody tr:last-child td {
+  border-bottom: 0;
+}
+
+.tbl tbody tr {
+  transition: background 0.12s;
+}
+
+.tbl tbody tr:hover {
+  background: #f7faff;
 }
 
 .tbl a {
-  color: #d7dce4;
+  color: var(--text-1);
   text-decoration: none;
 }
 
 .tbl a:hover {
-  color: #f2b34c;
+  color: var(--blue);
 }
 
 .title-cell {
@@ -1004,6 +1368,7 @@ onMounted(async () => {
   height: 30px;
   border-radius: 50%;
   object-fit: cover;
+  border: 1px solid var(--border);
 }
 
 .u-name {
@@ -1012,7 +1377,7 @@ onMounted(async () => {
 }
 
 .dim {
-  color: #66707f;
+  color: var(--text-3);
   font-size: 12.5px;
 }
 
@@ -1026,8 +1391,8 @@ onMounted(async () => {
   width: 30px;
   height: 30px;
   padding: 0;
-  border: 1px solid #2c333f;
-  border-radius: 6px;
+  border: 1px solid var(--border-strong);
+  border-radius: 7px;
   background: transparent;
   cursor: pointer;
 }
@@ -1037,51 +1402,58 @@ onMounted(async () => {
   align-items: center;
   gap: 6px;
   font-size: 13px;
-  color: #aab3c2;
+  color: var(--text-2);
   cursor: pointer;
 }
 
 .pill {
-  padding: 4px 12px;
+  padding: 3px 12px;
   border-radius: 999px;
-  border: 1px solid #2c333f;
-  background: transparent;
-  color: #8a93a3;
+  border: 1px solid var(--border-strong);
+  background: #fff;
+  color: var(--text-2);
   font-size: 12.5px;
   cursor: pointer;
+  transition: background 0.12s;
 }
 
 .pill.pinned {
-  color: #f2b34c;
-  border-color: rgba(242, 179, 76, 0.5);
+  color: var(--blue);
+  border-color: rgba(37, 99, 235, 0.45);
+  background: var(--blue-soft);
 }
 
 .pill.published {
-  color: #7ec699;
-  border-color: rgba(126, 198, 153, 0.4);
+  color: var(--green);
+  border-color: rgba(21, 128, 61, 0.35);
+  background: var(--green-soft);
   cursor: default;
 }
 
 .pill.draft {
-  color: #8a93a3;
+  color: var(--text-3);
+  background: #f6f8fc;
   cursor: default;
 }
 
 .pill.active {
-  color: #7ec699;
-  border-color: rgba(126, 198, 153, 0.4);
+  color: var(--green);
+  border-color: rgba(21, 128, 61, 0.35);
+  background: var(--green-soft);
 }
 
 .pill.disabled {
-  color: #ff7b72;
-  border-color: rgba(255, 123, 114, 0.4);
+  color: var(--red);
+  border-color: rgba(211, 56, 74, 0.4);
+  background: var(--red-soft);
 }
 
 /* 弹层 */
 .modal-mask {
   position: fixed;
   inset: 0;
-  background: rgba(6, 8, 11, 0.6);
+  background: rgba(15, 26, 46, 0.42);
+  backdrop-filter: blur(3px);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1089,29 +1461,36 @@ onMounted(async () => {
 }
 
 .modal {
-  width: min(360px, calc(100vw - 40px));
-  background: #191d24;
-  border: 1px solid #262c36;
-  border-radius: 12px;
-  padding: 24px;
+  width: min(380px, calc(100vw - 40px));
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 16px;
+  padding: 26px;
+  box-shadow: 0 24px 60px -24px rgba(23, 43, 99, 0.4);
 }
 
 .modal h3 {
   margin: 0 0 16px;
   font-size: 15px;
-  color: #f2b34c;
+  color: var(--text-1);
 }
 
 .modal input {
   width: 100%;
   box-sizing: border-box;
   padding: 10px 12px;
-  background: #12151a;
-  border: 1px solid #2c333f;
-  border-radius: 8px;
-  color: #e7e9ee;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
   font-size: 13.5px;
   outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+
+.modal input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
 }
 
 .modal-ops {
@@ -1135,10 +1514,17 @@ onMounted(async () => {
     font-size: 12px;
   }
   .main {
-    padding: 24px 18px 60px;
+    padding: 22px 16px 60px;
   }
   .grid {
     grid-template-columns: 1fr;
+  }
+  .card {
+    padding: 18px 16px 20px;
+  }
+  .row > span,
+  .body-row > span {
+    width: 84px;
   }
 }
 </style>

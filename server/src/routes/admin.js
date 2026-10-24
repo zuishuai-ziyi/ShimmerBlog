@@ -3,12 +3,14 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
 import { signAdminToken } from '../utils.js';
-import { getAllSettings, setSettings, githubConfig, smtpConfig } from '../services/settings.js';
+import { getAllSettings, setSettings, githubConfig, smtpConfig, MAIL_TEMPLATES } from '../services/settings.js';
 import { sendTestEmail } from '../services/mailer.js';
 import { makeLimiter } from '../utils.js';
 import { imageUpload } from '../uploads.js';
 
 export const adminRouter = Router();
+
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 const ADMIN_SELECT = 'id, email, name, name_color, bio, avatar_url, permissions, status, github_id, email_verified, created_at';
 const PERMISSION_KEYS = ['post'];
@@ -97,6 +99,26 @@ adminRouter.patch('/users/:id', adminRequired, async (req, res, next) => {
       sets.push('status = ?');
       args.push(req.body.status);
     }
+    if (req.body?.name !== undefined) {
+      const n = String(req.body.name ?? '').trim();
+      if (!n) return res.status(400).json({ error: '昵称不能为空' });
+      sets.push('name = ?');
+      args.push(n.slice(0, 50));
+    }
+    if (req.body?.email !== undefined) {
+      const mail = String(req.body.email ?? '').trim().toLowerCase();
+      if (!EMAIL_RE.test(mail)) return res.status(400).json({ error: '邮箱格式不正确' });
+      const [dup] = await pool.query('SELECT id FROM users WHERE email = ? AND id != ? LIMIT 1', [mail, id]);
+      if (dup[0]) return res.status(409).json({ error: '该邮箱已被其他用户使用' });
+      sets.push('email = ?', 'email_verified = 0'); // 新邮箱需重新验证（验证码登录可重新验证）
+      args.push(mail);
+    }
+    if (req.body?.password !== undefined) {
+      const pwd = String(req.body.password ?? '');
+      if (pwd.length < 6) return res.status(400).json({ error: '密码至少 6 位' });
+      sets.push('password_hash = ?');
+      args.push(bcrypt.hashSync(pwd, 10));
+    }
     if (req.body?.name_color !== undefined) {
       const c = String(req.body.name_color ?? '').trim();
       if (c && !NAME_COLOR_RE.test(c)) return res.status(400).json({ error: '颜色格式不正确' });
@@ -128,6 +150,19 @@ adminRouter.patch('/users/:id', adminRequired, async (req, res, next) => {
   }
 });
 
+/** 删除用户：彻底删除（文章经 fk_articles_author ON DELETE CASCADE 级联删除） */
+adminRouter.delete('/users/:id', adminRequired, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    const [rows] = await pool.query('SELECT id FROM users WHERE id = ? LIMIT 1', [id]);
+    if (!rows[0]) return res.status(404).json({ error: '用户不存在' });
+    await pool.query('DELETE FROM users WHERE id = ?', [id]);
+    res.json({ ok: true });
+  } catch (e) {
+    next(e);
+  }
+});
+
 /* ---------- 站点配置（站点信息 / 关于页 / 邮件模板 / SMTP） ---------- */
 adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
   try {
@@ -141,6 +176,17 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
         github_client_secret: all.github_client_secret ? '__KEEP__' : '',
         smtp_pass: all.smtp_pass ? '__KEEP__' : '',
       },
+      // 邮件模板元数据：前端据此渲染每种邮件的编辑器（含占位符提示与内置默认值）
+      mailTemplates: Object.values(MAIL_TEMPLATES).map((t) => ({
+        kind: t.kind,
+        label: t.label,
+        desc: t.desc,
+        placeholders: t.placeholders,
+        subjectKey: t.subjectKey,
+        bodyKey: t.bodyKey,
+        defaultSubject: t.defaults.subject,
+        defaultBody: t.defaults.body,
+      })),
       githubEnabled: gh.enabled,
       smtpEnabled: !!smtp,
     });
@@ -156,6 +202,11 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     for (const key of ['github_client_secret', 'smtp_pass']) {
       if (body[key] === '__KEEP__' || body[key] === '') delete body[key];
       else if (body[key] === '__CLEAR__') body[key] = '';
+    }
+    // 非密文本字段（SMTP 主机/端口/用户/发件人）：'__CLEAR__' 同样视为清空，
+    // 防止哨兵串被当成真实值存库（曾导致 smtp_host='__CLEAR__' 连不上）
+    for (const key of ['smtp_host', 'smtp_port', 'smtp_user', 'smtp_from']) {
+      if (body[key] === '__CLEAR__') body[key] = '';
     }
     // 布尔开关统一存 '1' / '0'
     if (typeof body.register_open === 'boolean') body.register_open = body.register_open ? '1' : '0';

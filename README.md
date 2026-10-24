@@ -26,7 +26,7 @@ ShimmerBlog/
 │   │   ├── uploads.js      # multer（头像 / 文章配图）
 │   │   ├── routes/         # auth / articles / admin / site / health
 │   │   ├── middleware/     # authRequired / adminRequired
-│   │   ├── services/       # mailer（验证码邮件）· settings（站点配置）
+│   │   ├── services/       # mailer（验证码/欢迎/测试邮件）· settings（站点配置 + 邮件模板注册表）
 │   │   └── scripts/        # smoke-*.mjs 冒烟脚本、seed-demo.mjs 演示数据
 │   └── uploads/            # 运行期上传文件（不提交）
 ├── web/                    # Vue SPA（dev 5180）
@@ -85,7 +85,9 @@ cd ../web && npm run dev
 - **站点 Logo / 用户默认头像**：后台「站点」页上传（`POST/DELETE /api/admin/logo`、`POST/DELETE /api/admin/default-avatar`）。默认头像对所有无头像用户生效（文章卡/文章页/顶栏/控制台/空间页统一回退到 `GET /api/site` 的 `defaultAvatarUrl`）；未设置时使用内置 `web/src/assets/default-avatar.svg`。
 - **GitHub OAuth**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，
   Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`），把 Client ID / Secret 填进站点配置即可。
-- **邮箱验证码**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
+- **邮件（验证码 / 欢迎 / 测试）**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
+- **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
+- **发件人格式**：必须包含邮箱地址，推荐 `名称 <you@domain.com>`；只填名称会被自动包装成 `"名称" <SMTP 账号>`（否则 nodemailer 拿不到地址，信封 Return-Path 为空、无 From 头，外域邮箱会拒收或进垃圾桶，且退信也发不回来）。
 
 ## API 概览
 
@@ -106,8 +108,8 @@ cd ../web && npm run dev
 | `POST /api/articles` · `PUT /api/articles/:id` · `DELETE /api/articles/:id` | 发布 / 编辑 / 删除（作者或管理员） |
 | `POST /api/articles/:id/pin` | 置顶 / 取消置顶（管理员） |
 | `POST /api/articles/upload-image` | 正文插图上传 |
-| `GET /api/admin/users` · `PATCH /api/admin/users/:id` | 用户列表 / 禁用启用 / 角色（管理员） |
-| `GET /api/admin/settings` · `PUT /api/admin/settings` | 站点配置读写（管理员） |
+| `GET /api/admin/users` · `PATCH /api/admin/users/:id` · `DELETE /api/admin/users/:id` | 用户列表 / 禁用启用・权限・名字颜色・改名・改绑邮箱・重置密码 / 删除用户（彻底删除：该用户所有信息清除，文章经外键级联删除，原邮箱可重新注册） |
+| `GET /api/admin/settings` · `PUT /api/admin/settings` | 站点配置读写（含邮件模板与默认值元数据，管理员） |
 
 ## 界面实现要点
 
@@ -125,7 +127,8 @@ cd ../web && npm run dev
 cd server
 node scripts/smoke-auth.mjs       # 13 项：注册/登录/验证码/OAuth 占位/头像/改名
 node scripts/smoke-articles.mjs   # 22 项：草稿可见性/权限/分页/置顶/图片上传
-node scripts/smoke-admin.mjs      # 31 项：用户管理/站点配置/密钥掩码/注册开关
+node scripts/smoke-admin.mjs      # 48 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/注册开关/邮件模板元数据
+node scripts/e2e-mail-tpl.mjs     # 17 项：邮件模板全自定义（元数据/持久化/渲染/恢复默认）
 cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 ```
 

@@ -44,8 +44,8 @@ async function main() {
   check('/site 含 title/subtitle/registerOpen/githubEnabled', ['title', 'subtitle', 'registerOpen', 'githubEnabled'].every((k) => k in site.data));
 
   console.log('\n== 后台鉴权 ==');
-  const adminLogin = await req('POST', '/auth/login', { body: { email: 'admin@shimmerblog.local', password: 'shimmer-admin' } });
-  check('管理员登录 200', adminLogin.status === 200, JSON.stringify(adminLogin.data));
+  const adminLogin = await req('POST', '/admin/login', { body: { password: process.env.SB_ADMIN_PASSWORD || 'shimmer-admin' } });
+  check('管理员登录 200', adminLogin.status === 200 && !!adminLogin.data?.token, JSON.stringify(adminLogin.data));
   const adminToken = adminLogin.data?.token;
 
   // 普通用户
@@ -56,7 +56,7 @@ async function main() {
   const userId = reg.data?.user?.id;
 
   const denied = await req('GET', '/admin/users', { token: userToken });
-  check('普通用户访问 /admin/users 403', denied.status === 403, String(denied.status));
+  check('普通用户访问 /admin/users 401', denied.status === 401, String(denied.status));
 
   const anon = await req('GET', '/admin/settings');
   check('匿名访问 /admin/settings 401', anon.status === 401, String(anon.status));
@@ -71,8 +71,8 @@ async function main() {
   const search = await req('GET', `/admin/users?q=smoke${rnd().slice(0, 0)}`, { token: adminToken });
   check('用户搜索接口可用', search.status === 200);
 
-  const selfPatch = await req('PATCH', `/admin/users/${adminLogin.data.user.id}`, { token: adminToken, body: { role: 'user' } });
-  check('禁止修改自己 400', selfPatch.status === 400, String(selfPatch.status));
+  const rolePatch = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { role: 'user' } });
+  check('已废弃 role 字段 400', rolePatch.status === 400, String(rolePatch.status));
 
   const disable = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { status: 'disabled' } });
   check('禁用用户 200 且 status=disabled', disable.status === 200 && disable.data?.user?.status === 'disabled', JSON.stringify(disable.data));
@@ -83,13 +83,58 @@ async function main() {
   const enable = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { status: 'active' } });
   check('启用用户 200', enable.status === 200 && enable.data?.user?.status === 'active');
 
-  const promote = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { role: 'admin' } });
-  check('设为管理员 200', promote.status === 200 && promote.data?.user?.role === 'admin');
-  const demote = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { role: 'user' } });
-  check('取消管理员 200', demote.status === 200 && demote.data?.user?.role === 'user');
+  const perms = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { permissions: ['post'] } });
+  const permArr = typeof perms.data?.user?.permissions === 'string' ? JSON.parse(perms.data.user.permissions) : perms.data?.user?.permissions;
+  check('设置用户权限 200', perms.status === 200 && Array.isArray(permArr) && permArr.includes('post'), JSON.stringify(perms.data?.user?.permissions));
+  const color = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { name_color: '#2563eb' } });
+  check('设置名字颜色 200', color.status === 200 && color.data?.user?.name_color === '#2563eb');
+
+  console.log('\n== 用户扩展操作（第 38 轮） ==');
+  const uEmptyName = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { name: '   ' } });
+  check('空昵称 400', uEmptyName.status === 400, String(uEmptyName.status));
+  const badMail = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { email: 'not-an-email' } });
+  check('非法邮箱 400', badMail.status === 400, String(badMail.status));
+  const shortPwd = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { password: '123' } });
+  check('短密码 400', shortPwd.status === 400, String(shortPwd.status));
+  const rename = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { name: '改名' + rnd() } });
+  check('改名 200', rename.status === 200 && !!rename.data?.user?.name, JSON.stringify(rename.data));
+  const newMail = `moved${rnd()}@test.local`;
+  const chMail = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { email: newMail } });
+  check('改邮箱 200 且重置验证态', chMail.status === 200 && chMail.data?.user?.email === newMail && chMail.data?.user?.email_verified === 0, JSON.stringify(chMail.data));
+  const dupMail = await req('POST', '/auth/register', { body: { email: `other${rnd()}@test.local`, password: 'secret123', name: '占用邮箱' } });
+  const dupId = dupMail.data?.user?.id;
+  const dupRes = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { email: dupMail.data?.user?.email } });
+  check('改到已占用邮箱 409', dupRes.status === 409, String(dupRes.status));
+  const oldLogin = await req('POST', '/auth/login', { body: { email: email, password: 'secret123' } });
+  check('旧邮箱登录 401', oldLogin.status === 401, String(oldLogin.status));
+  const newLogin = await req('POST', '/auth/login', { body: { email: newMail, password: 'secret123' } });
+  check('新邮箱旧密码登录 200', newLogin.status === 200);
+  const rp = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { password: 'newpass456' } });
+  check('重置密码 200', rp.status === 200);
+  const rpLogin = await req('POST', '/auth/login', { body: { email: newMail, password: 'newpass456' } });
+  check('新密码登录 200', rpLogin.status === 200);
+  const ghost = await req('DELETE', `/admin/users/99999999`, { token: adminToken });
+  check('删除不存在用户 404', ghost.status === 404, String(ghost.status));
+  // 删除用户（硬删除：文章级联删除）
+  const del = await req('DELETE', `/admin/users/${dupId}`, { token: adminToken });
+  check('删除用户 200', del.status === 200 && del.data?.ok === true, JSON.stringify(del.data));
+  const delAgain = await req('DELETE', `/admin/users/${dupId}`, { token: adminToken });
+  check('删除不存在用户 404', delAgain.status === 404, String(delAgain.status));
+  const tSpace = await req('GET', `/space/${dupId}`);
+  check('删除后空间 404', tSpace.status === 404, String(tSpace.status));
+  const gone = await req('POST', '/auth/login', { body: { email: dupMail.data?.user?.email, password: 'secret123' } });
+  check('已删用户登录 401', gone.status === 401, String(gone.status));
+  const reReg = await req('POST', '/auth/register', { body: { email: dupMail.data?.user?.email, password: 'secret123', name: '邮箱释放回归' } });
+  check('释放后的邮箱可重新注册 201', reReg.status === 201, String(reReg.status));
+  const freedId = reReg.data?.user?.id;
 
   const badField = await req('PATCH', `/admin/users/${userId}`, { token: adminToken, body: { status: 'hacked' } });
   check('非法 status 400', badField.status === 400, String(badField.status));
+
+  console.log('\n== 邮件模板（第 36 轮新增） ==');
+  const tplSet = await req('GET', '/admin/settings', { token: adminToken });
+  const tpls = tplSet.data?.mailTemplates ?? [];
+  check('mailTemplates 三类', tpls.length === 3 && ['code', 'welcome', 'test'].every((k) => tpls.some((t) => t.kind === k)), JSON.stringify(tpls.map((t) => t.kind)));
 
   console.log('\n== 站点配置 ==');
   const getSet = await req('GET', '/admin/settings', { token: adminToken });
@@ -139,10 +184,9 @@ async function main() {
   const emptyName = await req('PUT', '/auth/profile', { token: reopened.data.token, body: { name: '' } });
   check('空昵称 400', emptyName.status === 400, String(emptyName.status));
 
-  // 清理冒烟用户
-  const cleanupIds = [userId, reopened.data.user.id];
-  for (const id of cleanupIds) {
-    await req('PATCH', `/admin/users/${id}`, { token: adminToken, body: { status: 'disabled' } });
+  // 清理冒烟用户（硬删除）
+  for (const id of [userId, dupId, freedId, reopened.data.user.id].filter(Boolean)) {
+    await req('DELETE', `/admin/users/${id}`, { token: adminToken });
   }
 
   console.log(`\n结果：${pass} passed, ${fail} failed\n`);

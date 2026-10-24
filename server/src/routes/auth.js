@@ -4,7 +4,7 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
-import { sendCodeEmail } from '../services/mailer.js';
+import { sendCodeEmail, sendWelcomeEmail } from '../services/mailer.js';
 import { githubConfig, webOrigin, getSetting } from '../services/settings.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
@@ -38,6 +38,7 @@ authRouter.post('/register', async (req, res, next) => {
       [email, hash, nick]
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
+    sendWelcomeEmail(rows[0]).catch(() => {}); // 欢迎邮件：异步发送，不阻塞注册
     res.status(201).json({ token: signToken(rows[0]), user: publicUser(rows[0]) });
   } catch (e) {
     next(e);
@@ -130,6 +131,7 @@ authRouter.post('/login/code', async (req, res, next) => {
       );
       const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
       user = created[0];
+      sendWelcomeEmail(user).catch(() => {}); // 验证码首次登录 = 自动注册，同样发欢迎邮件
     } else if (user.status !== 'active') {
       return res.status(403).json({ error: '账号已被禁用' });
     }
@@ -230,6 +232,7 @@ authRouter.get('/github/callback', async (req, res) => {
     // 按 github_id 找老用户；否则按邮箱并档；否则新建
     const [byGh] = await pool.query('SELECT * FROM users WHERE github_id = ? LIMIT 1', [ghUser.id]);
     let user = byGh[0];
+    let createdNew = false;
     if (!user && email) {
       const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
       user = byEmail[0];
@@ -245,8 +248,10 @@ authRouter.get('/github/callback', async (req, res) => {
       );
       const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
       user = created[0];
+      createdNew = true;
     }
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+    if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
     const origin = await webOrigin();
     res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
   } catch (e) {

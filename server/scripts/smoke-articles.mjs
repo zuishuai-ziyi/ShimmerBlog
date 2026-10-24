@@ -21,9 +21,9 @@ const auth = (t) => ({ 'Content-Type': 'application/json', Authorization: `Beare
 const tA = await register('writerA');
 const tB = await register('writerB');
 ok('register A+B', !!tA && !!tB);
-const rAdmin = await fetch(`${BASE}/auth/login`, {
+const rAdmin = await fetch(`${BASE}/admin/login`, {
   method: 'POST', headers: { 'Content-Type': 'application/json' },
-  body: JSON.stringify({ email: 'admin@shimmerblog.local', password: 'shimmer-admin' }),
+  body: JSON.stringify({ password: 'shimmer-admin' }),
 });
 const tAdmin = (await j(rAdmin)).token;
 ok('admin login', !!tAdmin);
@@ -65,11 +65,11 @@ ok('B edit A 403', r.status === 403);
 r = await fetch(`${BASE}/articles/${pub.id}`, { method: 'DELETE', headers: auth(tB) });
 ok('B delete A 403', r.status === 403);
 
-// 6. 管理员：可编辑他人文章 + 置顶 → 列表置顶优先
-r = await fetch(`${BASE}/articles/${pub.id}`, { method: 'PUT', headers: auth(tAdmin), body: JSON.stringify({ title: 'A 的第一篇(管理员修订)', content: '# 正文', summary: 'pub', status: 'published' }) });
-ok('admin edit others 200', r.status === 200);
-r = await fetch(`${BASE}/articles/${pub.id}/pin`, { method: 'POST', headers: auth(tAdmin), body: JSON.stringify({ pinned: true }) });
-ok('admin pin 200', r.status === 200 && (await j(r)).article.pinned === 1);
+// 6. 管理后台：管理员 token 不能走用户文章接口；置顶走 /admin/articles
+r = await fetch(`${BASE}/articles/${pub.id}`, { method: 'PUT', headers: auth(tAdmin), body: JSON.stringify({ title: 'x', content: 'x' }) });
+ok('admin token 在用户文章接口 401', r.status === 401);
+r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tAdmin}` }, body: JSON.stringify({ pinned: true }) });
+ok('admin pin 200', r.status === 200 && (await j(r)).pinned === 1, JSON.stringify(r.status));
 r = await fetch(`${BASE}/articles?page=1&pageSize=2`);
 list = (await j(r)).items;
 ok('pinned first in list', list[0].id === pub.id, `first=${list[0].id}`);
@@ -91,15 +91,15 @@ ok('author delete own 200', r.status === 200);
 r = await fetch(`${BASE}/articles/${pubA2.id}`);
 ok('deleted detail 404', r.status === 404);
 
-// 9. 管理员置顶后取消
-r = await fetch(`${BASE}/articles/${pub.id}/pin`, { method: 'POST', headers: auth(tAdmin), body: JSON.stringify({ pinned: false }) });
-ok('admin unpin', r.status === 200 && (await j(r)).article.pinned === 0);
+// 9. 管理员置顶后取消（走 /admin/articles）
+r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tAdmin}` }, body: JSON.stringify({ pinned: false }) });
+ok('admin unpin', r.status === 200 && (await j(r)).pinned === 0);
 
 // 前端控制台传的是数字 0/1，必须同样生效（曾因只认 boolean false 导致取消置顶无效）
-r = await fetch(`${BASE}/articles/${pub.id}/pin`, { method: 'POST', headers: auth(tAdmin), body: JSON.stringify({ pinned: 1 }) });
-ok('admin pin numeric 1', r.status === 200 && (await j(r)).article.pinned === 1);
-r = await fetch(`${BASE}/articles/${pub.id}/pin`, { method: 'POST', headers: auth(tAdmin), body: JSON.stringify({ pinned: 0 }) });
-ok('admin unpin numeric 0', r.status === 200 && (await j(r)).article.pinned === 0);
+r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tAdmin}` }, body: JSON.stringify({ pinned: 1 }) });
+ok('admin pin numeric 1', r.status === 200 && (await j(r)).pinned === 1);
+r = await fetch(`${BASE}/admin/articles/${pub.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${tAdmin}` }, body: JSON.stringify({ pinned: 0 }) });
+ok('admin unpin numeric 0', r.status === 200 && (await j(r)).pinned === 0);
 
 console.log(`\n${pass} PASS, ${fail} FAIL`);
 process.exit(fail ? 1 : 0);

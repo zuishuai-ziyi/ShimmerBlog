@@ -309,3 +309,59 @@
 - 后端：settings.js DEFAULTS 补齐 `site_logo_url`/`default_avatar_url`/`about_html`/`mail_*`/`smtp_*`（**修复隐患：setSettings 白名单是 `k in DEFAULTS`，此前 logo/about/smtp 键均不在 DEFAULTS 里，保存会被静默丢弃**）；publicSiteInfo 加 `defaultAvatarUrl`；admin.js 新增 `POST/DELETE /api/admin/default-avatar`（imageUpload，同 Logo 流程）。
 - 前端：site store 加 `defaultAvatarUrl`；ArticleCard/ArticleView/TopBar/SpaceView/ConsoleView 五处回退头像改为 `site.info.defaultAvatarUrl || 内置 svg`；AdminView「站点」页 Logo 区块下新增「用户默认头像」（上传/预览/恢复内置）。
 - E2E：admin 登录 → 上传 default.png → `POST /admin/default-avatar` 200（`/uploads/images/…`）→ `/api/site` 返回该 URL → 图片 200 image/png → DELETE 重置回 `""`；顺带验证 Logo 上传持久化已修复（upload → `site.logoUrl` 一致）。浏览器实测首页卡片头像 src = 内置 SVG data URI（含用户图特征 `t='1792773105904'`）；`npm run build` 1.66s 0 错误。上传的测试头像文件未删（同 Logo 流程，不影响）。
+
+## 36. 后台白蓝配色 + 邮件模板全自定义（用户：后台改白蓝简约大气；所有邮件模板支持自定义）
+
+- 需求：①后台界面改白蓝配色、简约美观大气；②邮件模板不止验证码，全部支持自定义（注册欢迎邮件为新增，后台测试邮件不再复用验证码模板）。
+- 后端：settings.js DEFAULTS 增 `mail_welcome_subject/body`、`mail_test_subject/body`；新增 `MAIL_TEMPLATES` 注册表（`code`/`welcome`/`test` 三类，含 label/desc/placeholders/subjectKey/bodyKey/内置默认；占位符 `{site}` 站点名、`{code}` 验证码、`{name}` 昵称）与 `mailTemplate(kind, vars)`（读库、空值回退内置、replaceAll 渲染，`{site}` 自动取 site_title）；mailer.js 重写为三入口 `sendCodeEmail`/`sendWelcomeEmail`（try 包裹永不抛错、无 email/SMTP 静默跳过）/`sendTestEmail`（落款带发送时间）；auth.js 注册、验证码首登自动注册、GitHub 首次授权三处建用户路径均触发欢迎邮件（`.catch(()=>{})` 不阻塞）；admin.js GET /admin/settings 响应新增 `mailTemplates` 元数据（PUT 无需改，模板键已入 DEFAULTS 白名单）。
+- 前端：AdminView.vue 整体重写为白蓝主题（`--bg:#f4f7fc`/`--surface:#fff`/`--blue:#2563eb`/`--blue-soft:#eef4ff`，白卡+蓝竖条标题、侧栏激活蓝软底、登录门浅蓝渐变+渐变字，状态 pill 蓝/绿/红）；「邮件」页改三段卡片：模板编辑器（v-for 三模板，主题/正文/占位符 chip 点击插入/恢复默认=置空回退内置）+ SMTP 配置 + 测试邮件。
+- 验证：`e2e-mail-tpl.mjs` 17 passed/0 failed（模板元数据、4 键 PUT 持久化回读、渲染含自定义值、SMTP 未配置 mail/test 400 友好提示、注册不阻塞、恢复默认置空）；`tpl-check.mjs` 三模板渲染含 `{site}` 自动填「微光博客」；`welcome-check.mjs`（已删）验证无 SMTP/无 email 返回 false 且打日志。回归：`smoke-auth` 13/0、`smoke-admin` 32/0（+1 项邮件模板元数据）、`smoke-articles` 22/0；`npm run build` 0 错误。**旧冒烟脚本未跟上第 33/34 轮改动（非本轮回归），已同步修复**：smoke-auth:42 去 `user.role` 断言；smoke-admin 改 `POST /admin/login`（独立后台 JWT）、去 role 设/取消断言、新增「已废弃 role 字段 400」与 permissions/name_color 用例、「普通用户访问 /admin/users」403→401（adminRequired 对非后台 token 统一 401）；smoke-articles 管理员登录改 `/admin/login`，置顶/编辑他人改走 `PATCH /admin/articles/:id`（用户文章接口不再认管理员 token，断言 401）。
+- 备注：本会话无浏览器，后台视觉以构建+代码审查为准；改动未提交（用户未要求）。
+
+## 37. 邮件发送失败排查（用户：前端提示成功但未收到；SMTP 为 BillionMail mail.email.xiaoziyi.com:465 TLS）
+
+- 排查：`diag-smtp.mjs` 读库发现 `smtp_from` 只填了名称 `ShimmerBlog`（无邮箱地址）→ nodemailer 拿不到地址，发出去的信 **Return-Path 为 `<>`（空信封）、连 From 头都没有**（IMAP 实测首封信头为证）。服务器 DATA 阶段照收 → 前端提示成功；但外域 MTA 对空信封/无 From 的信件直接拒收或进垃圾桶，退信也因 Return-Path 为空发不回来——正是「提示成功但未收到」。
+- DNS 顺带核查：mail.email.xiaoziyi.com → 198.20.0.60（新机器，非 77）；`email.xiaoziyi.com` SPF `v=spf1 +a +mx +ip4:192.140.166.198 -all`，`+mx` 经 mail.email.xiaoziyi.com 覆盖 198.20.0.60，SPF 无冲突；IMAP 明文 143 会被 reset，993（SSL）正常。
+- 修复：①settings.js `smtpConfig()` 发件人兜底——`from` 不含 `@` 时自动包装为 `"名称" <SMTP账号>`；②库里 `smtp_from` 修正为 `ShimmerBlog <noreply@email.xiaoziyi.com>`；③AdminView SMTP 表单下发件人栏加格式说明。
+- 验证：修复后重发测试邮件，IMAP 实测新信 `Return-Path: <noreply@email.xiaoziyi.com>`、`From: ShimmerBlog <noreply@email.xiaoziyi.com>` ✓；`npm run build` 0 错误。新增诊断脚本 `server/scripts/diag-smtp.mjs`（查看生效 SMTP 配置，密码打码）与 `diag-smtp-send.mjs`（实发测试邮件，打印完整 SMTP 错误）。
+- 备注：如外域邮箱仍收不到，属新服务器出站信誉/DKIM 问题（需在 BillionMail 侧查队列与 DKIM 签名），与 ShimmerBlog 代码无关。
+
+## 38. 后台用户管理扩展：改名/改绑邮箱/重置密码/删除用户（用户：允许后台进行更多操作）
+
+- 需求：后台用户管理支持更多操作——改名、删除用户、更改绑定邮箱等。
+- 后端（server/src/routes/admin.js）：PATCH /admin/users/:id 扩展 `name`（trim 非空、截 50）、`email`（格式校验 + `WHERE email=? AND id!=?` 查重 409「该邮箱已被其他用户使用」、改邮箱同时置 `email_verified=0` 需重新验证）、`password`（≥6 位，bcrypt）；新增 DELETE /admin/users/:id（404「用户不存在」；文章经 `fk_articles_author ON DELETE CASCADE` 在 DB 层级联删除）。
+- 前端（web/src/views/AdminView.vue）：用户行操作列改「空间 / 编辑 / 删除」；新增「编辑用户」弹层（昵称/绑定邮箱/新密码三字段，仅提交变更字段；改邮箱提示需重新验证）；删除走 confirm 二次确认（文案注明文章一并删除），成功后本地列表移除。
+- 事故与修复：e2e 清 SMTP 时误用 `__CLEAR__` 哨兵——admin.js PUT 只对 `github_client_secret`/`smtp_pass` 处理该哨兵，**非密 SMTP 字段把 `__CLEAR__` 字符串原样入库**（smtp_host='__CLEAR__' 连不上报 Unexpected socket close），且 `smtp_pass` 被真清空。两处修复：①admin.js PUT 对 `smtp_host/port/user/from` 同样把 `__CLEAR__` 视为清空；②e2e-mail-tpl.mjs 改为只清非密字段（空串）且**绝不动 smtp_pass**。误清的 SMTP 密码从 **MySQL binlog ROW 镜像**找回（`mysqlbinlog --no-defaults -vv --base64-output=DECODE-ROWS` 解 000096 号日志 20:24:09 的 UPDATE before-image），已完整恢复六项 SMTP 设置并实发验证 ✓。
+- 测试修复（环境自适应）：smoke-auth.mjs 原依赖 send-code 的 devCode（仅 SMTP 未配置时返回，第 37 轮库内已配 SMTP 后失效）→ 新增 `latestCode()` 直查 email_codes 表取码，via 断言放宽 console/smtp。
+- 验证：smoke-admin 45/0（新增 13 项：空昵称 400、非法邮箱 400、短密码 400、改名 200、改邮箱 200 且 email_verified=0、改到已占用邮箱 409、旧邮箱登录 401、新邮箱旧密码 200、重置密码 200、新密码 200、删不存在 404、删用户 200、已删登录 401）；smoke-auth 13/0、smoke-articles 22/0、e2e-mail-tpl 17/0（跑完 SMTP 设置原样保留）；`npm run build` 0 错误（AdminView 21.11kB）。
+- 补充（用户问「删除后个人空间为何还存在」）：后端实为 404（实测注册→发文章→删用户→空间 404「用户不存在」、文章 404）；**根因是 SpaceView.vue 从未渲染 `missing` 状态**——API 404 时页面照常渲染资料卡骨架（头像回退/名字「…」/「还没有写简介」/「还没有公开的文章」），看起来像空间还在。已修：missing 时显示「该用户不存在或已注销 + 返回首页」，正常内容套 `<template v-else>`；build 0 错误。另注意已打开的空间页面不会自动感知删除，刷新后即见提示。
+- 备注：改动未提交（用户未要求）。
+
+## 39. 删除改「注销」（墓碑软删除）：已注销用户显示墓碑资料（用户：注销用户名显示「已注销用户」、头像恢复默认、空间显示已注销）
+
+- 需求：用户删除改为「注销」——用户名显示为「已注销用户」，头像改为默认头像，个人空间显示该用户已注销。
+- 设计：后台「删除」按钮改为「注销」，语义为**墓碑软删除**——保留其全部文章，资料匿名化；新增 `?purge=1` 参数保留彻底删除（清理脚本/确需物理删除时用）。
+- 后端：
+  - server/src/db.js：users.status ENUM 扩为 `('active','disabled','deleted')`（SCHEMA_SQL 同步 + 启动迁移 `ALTER TABLE ... MODIFY COLUMN`，已迁移则忽略）。
+  - server/src/routes/admin.js DELETE /users/:id 重写：`?purge=1` → 硬删（文章级联删除，返回 `{ok,purged:true}`）；否则注销——404「用户不存在」；对已 deleted 用户幂等返回墓碑资料；UPDATE 置 `status='deleted', name='已注销用户', name_color=NULL, avatar_url=NULL, bio='该用户已注销', email='deleted-<id>@tombstone.local'`（释放原邮箱可重新注册）`, email_verified=0, password_hash='', github_id=NULL, permissions=JSON_ARRAY()`；返回 `{ok:true, deleted:true, user}`。
+  - server/src/routes/space.js：`status='deleted'` → 200 且响应带 `deleted:true`（前端据此刻画墓碑提示）；无用户/disabled 仍 404。
+- 前端：
+  - web/src/views/SpaceView.vue：`tombstoned`（data.deleted）时资料卡上方显示胶囊提示「该用户已注销，资料仅作展示」；「编辑」按钮对墓碑隐藏；头像因 avatar_url 已清空自动回退默认头像，名字即「已注销用户」。
+  - web/src/views/AdminView.vue：用户列表对 deleted 用户——邮箱列显「（已注销）」、名字灰色、权限/颜色列显「—」、状态列灰色「已注销」pill、操作列只留「空间」；「删除」按钮改「注销」，confirm 文案说明文章保留、邮箱释放；成功后就地 `Object.assign(u, data.user)` 更新行（AdminUser.status 类型加 'deleted'）。
+- 测试：server/scripts/smoke-admin.mjs 删除段改注销语义（注销 200 且 status/name 正确、空间 200 且 deleted:true、注销后登录 401、原邮箱可重新注册 201、重复注销幂等、purge=1 返回 purged:true 且空间 404；清理段全部 purge）；e2e 清理脚本 cleanup-e2e-user.mjs 用原生 SQL DELETE 不受影响。
+- 验证：smoke-admin **50/0**、smoke-auth 13/0、smoke-articles 22/0、e2e-mail-tpl 17/0；`npm run build` 0 错误（AdminView 21.56kB）。
+- 备注：①注销用户 GitHub 身份（github_id）一并解绑，原 GitHub 授权再登录会新建账号；②已打开的空间页（SPA）不会自动感知注销，刷新后见提示；③「结果：0 passed」假象为 FilesInNAS（SMB 同步目录）文件缓存陈旧所致，用标记行验证后确认实际 50/0，与代码无关。改动未提交（用户未要求）。
+
+## 40. 回退注销墓碑：删除用户改为彻底删除（用户：回退至完全删除，清除所有信息）
+
+- 需求：回退第 39 轮「注销（墓碑软删除）」——后台删除用户恢复为**彻底删除**，清除该用户所有信息（文章级联删除）。
+- 后端回退：
+  - server/src/routes/admin.js：DELETE /admin/users/:id 改回硬删除——`DELETE FROM users WHERE id = ?`，404「用户不存在」，成功返回 `{ok:true}`；移除 `?purge=1` 参数与全部墓碑逻辑（不再有「已注销用户」状态）。
+  - server/src/routes/space.js：移除 `deleted:true` 响应字段与 deleted 分支；无用户/disabled 仍 404。
+  - server/src/db.js：users.status 回退为 `ENUM('active','disabled')`（SCHEMA_SQL + 启动迁移：先 `DELETE FROM users WHERE status='deleted'` 清历史墓碑行，再 MODIFY 枚举，已迁移则忽略）。
+- 前端回退：
+  - web/src/views/AdminView.vue：「注销」按钮改回「删除」，confirm 文案「删除后该用户的所有信息将被清除，其文章将一并删除，且不可恢复」，成功后列表移除该行；移除 deleted 行的灰色/「（已注销）」/「—」/灰色 pill 等全部墓碑 UI 与 `.pill.deleted`/`.u-name.tomb` CSS；AdminUser.status 类型回退为 `'active' | 'disabled'`。
+  - web/src/views/SpaceView.vue：移除墓碑提示条与 `tombstoned` ref；missing 文案改回「该用户不存在」；编辑按钮恢复 `v-if="isSelf"`。
+- 测试：server/scripts/smoke-admin.mjs 删除段改回硬删除语义（删除 200、重复删除 404、删除后空间 404、已删登录 401、原邮箱可重新注册 201；清理段去掉 `?purge=1`）。
+- 验证：smoke-admin **48/0**、smoke-auth 13/0、smoke-articles 22/0、e2e-mail-tpl 17/0；`npm run build` 0 错误（AdminView 21.13kB）。线上库实测：`status` 枚举已回退为 `enum('active','disabled')`、墓碑存量行 0。
+- 备注：改动未提交（用户未要求）。

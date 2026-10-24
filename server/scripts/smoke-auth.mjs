@@ -2,7 +2,14 @@
  * 用户系统冒烟测试：node scripts/smoke-auth.mjs
  * 覆盖：注册→登录→/api/me→验证码登录→GitHub 占位→头像上传→资料修改
  */
+import { pool } from '../src/db.js';
+
 const B = 'http://localhost:3010/api/auth';
+/** 直查 DB 取最新验证码（SMTP 已配置时不返回 devCode，这是唯一稳定取码途径） */
+async function latestCode(email) {
+  const [rows] = await pool.query('SELECT code FROM email_codes WHERE email = ? ORDER BY id DESC LIMIT 1', [email]);
+  return rows[0]?.code;
+}
 const MAIL = `tester-${Date.now()}@shimmer.dev`;
 let pass = 0;
 let fail = 0;
@@ -39,14 +46,14 @@ ok('wrong password 401', r.status === 401);
 
 r = await fetch(`${B}/me`, { headers: { Authorization: `Bearer ${t1}` } });
 body = await r.json().catch(() => ({}));
-ok('/api/me', r.status === 200 && body.user?.id > 0 && body.user?.role === 'user', `name=${body.user?.name}`);
+ok('/api/me', r.status === 200 && body.user?.id > 0, `name=${body.user?.name}`);
 
 r = await post('/send-code', { email: `magic-${Date.now()}@shimmer.dev` });
 body = await r.json().catch(() => ({}));
-ok('send-code dev', r.status === 200 && body.via === 'console' && /^\d{6}$/.test(body.devCode ?? ''), `code=${body.devCode}`);
+ok('send-code 200', r.status === 200 && (body.via === 'console' || body.via === 'smtp'), `via=${body.via}`);
 const magicMail = `magic-${Date.now()}@shimmer.dev`;
 r = await post('/send-code', { email: magicMail });
-const code = (await r.json().catch(() => ({}))).devCode;
+const code = (await r.json().catch(() => ({}))).devCode ?? (await latestCode(magicMail));
 
 r = await post('/login/code', { email: magicMail, code });
 body = await r.json().catch(() => ({}));

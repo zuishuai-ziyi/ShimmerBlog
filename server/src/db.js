@@ -95,6 +95,9 @@ export async function initDatabase() {
   await ensureColumn('users', 'bio', 'bio VARCHAR(500) NULL AFTER name_color');
   await ensureColumn('users', 'permissions', 'permissions JSON NULL AFTER bio');
   await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login'").catch(() => {});
+  // 彻底删除历史「已注销」存量行（含级联文章），再把 status 枚举回退为两态
+  await pool.query("DELETE FROM users WHERE status = 'deleted'").catch(() => {});
+  await pool.query("ALTER TABLE users MODIFY COLUMN status ENUM('active','disabled') NOT NULL DEFAULT 'active'").catch(() => {});
 
   // 3. 独立管理员密码（不再使用管理员用户账号）：不存在才用初始密码种子
   const [pw] = await pool.query("SELECT value FROM settings WHERE `key` = 'admin_password_hash' LIMIT 1");

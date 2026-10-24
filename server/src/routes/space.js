@@ -13,7 +13,8 @@ spaceRouter.get('/:id', async (req, res, next) => {
       [id]
     );
     const user = users[0];
-    if (!user || user.status !== 'active') return res.status(404).json({ error: '用户不存在' });
+    if (!user) return res.status(404).json({ error: '用户不存在' });
+    if (user.status === 'disabled') return res.status(404).json({ error: '用户不存在' });
 
     const page = Math.max(1, Number(req.query.page ?? 1) || 1);
     const pageSize = Math.min(50, Math.max(1, Number(req.query.pageSize ?? 10) || 10));
