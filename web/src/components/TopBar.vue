@@ -15,7 +15,6 @@
             <img class="avatar" :src="auth.user.avatar_url || defaultAvatar" alt="" />
             <span class="uname" :style="auth.user.name_color ? { color: auth.user.name_color } : undefined">{{ auth.user.name }}</span>
           </router-link>
-          <router-link to="/admin" class="nav-link admin-link" title="管理后台">后台</router-link>
         </template>
         <router-link v-else to="/login" class="btn-login">登录</router-link>
       </nav>
@@ -142,11 +141,6 @@ const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
-}
-
-.admin-link {
-  font-size: 13.5px;
-  padding: 6px 12px;
 }
 
 .btn-login {

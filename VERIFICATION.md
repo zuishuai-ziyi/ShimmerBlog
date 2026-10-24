@@ -365,3 +365,40 @@
 - 测试：server/scripts/smoke-admin.mjs 删除段改回硬删除语义（删除 200、重复删除 404、删除后空间 404、已删登录 401、原邮箱可重新注册 201；清理段去掉 `?purge=1`）。
 - 验证：smoke-admin **48/0**、smoke-auth 13/0、smoke-articles 22/0、e2e-mail-tpl 17/0；`npm run build` 0 错误（AdminView 21.13kB）。线上库实测：`status` 枚举已回退为 `enum('active','disabled')`、墓碑存量行 0。
 - 备注：改动未提交（用户未要求）。
+
+## 41. Bug 修复：批量删除验证 + 邮件模板丢失（用户报告：删除有时不成功 / 自定义模板丢失）
+
+- 用户报告两个问题：①「删除用户时有时有些用户未删除成功（刷新后再次出现）」；②「非验证码邮件的自定义模板似乎会在某些情况下丢失」。
+- 问题 ① 结论：**当前删除逻辑无缺陷，批量删除实测全部成功**——一次性脚本创建 12 个用户 → 逐个 DELETE 全部 200 → 12/12 从管理列表消失、空间 404、登录 401；库中 `users` 仅剩 `active` 状态。「刷新后再次出现」最可能发生在第 39 轮「注销（软删除）」期间：注销后用户仍留在列表中（灰色「已注销」状态），观感即「没删掉、刷新又出现」；第 40 轮已回退硬删除，该现象随之消除。
+- 问题 ② 根因确定：**server/scripts/e2e-mail-tpl.mjs 每次运行都会把用户自定义模板覆盖并置空，且不还原**——第 8 步「恢复默认（置空）」只验证回退语义，未恢复测试前的原值。第 36~40 轮每轮回归都跑一次该脚本，用户当时设置的自定义模板被反复清空。修复：
+  - 脚本开头备份 6 个模板键（`mail_code_subject/body`、`mail_welcome_subject/body`、`mail_test_subject/body`，GET 返回真实值非掩码）；第 8 步先置空验证「回退内置默认」语义，随后 **PUT 还原测试前原值并 GET 断言一致**——跑测试不再破坏用户配置。
+  - 顺带修复：登录密码改 `process.env.SB_ADMIN_PASSWORD || '123456'`（原硬编码 `shimmer-admin` 在改密后已失效）。
+  - server/scripts/smoke-articles.mjs 同步修复登录密码（同因失效，导致 admin 置顶 6 用例失败）。
+- 前端加固（web/src/views/AdminView.vue）：新增 `settingsReady` 标志，bootstrap 拉取配置成功后才置 true；`saveSettings` 在未加载完成时阻止提交并提示「配置尚未加载完成，请刷新页面后再保存」——防止后端不可达时以空表单覆盖线上配置。
+- 验证：e2e-mail-tpl **19/0**（新增「还原原值」「模板键已还原为测试前原值」2 项）、smoke-admin 48/0、smoke-auth 13/0、smoke-articles 22/0；`npm run build` 0 错误（AdminView 21.23kB）；测试用户已清理（cleanup-e2e-user.mjs）。
+- 备注：改动未提交（用户未要求）。
+
+## 42. 页脚小字可自定义（用户 m00976）
+
+- 需求：关于页面底部的小字（原硬编码 `© {年份} {站点标题} · ShimmerBlog`）允许后台修改。
+- 后端（server/src/services/settings.js）：
+  - DEFAULTS 新增 `footer_text`（空 = 内置默认，顺带进入 setSettings 白名单）。
+  - 新增 `renderFooter(raw, siteTitle)`：占位符 `{year}`→当前年份、`{site}`→站点标题；`publicSiteInfo()` 响应新增 `footerText`（后端渲染完成，前端直接显示）。
+- 前端：
+  - web/src/stores/site.ts：`SiteInfo` 接口加 `footerText: string`，state 兜底默认（后端不可用时显示内置文案）。
+  - web/src/views/AboutView.vue：footer 改渲染 `site.info.footerText`；删除不再使用的 `year` 常量。
+  - web/src/views/AdminView.vue：「站点」页新增「页脚小字」输入框（placeholder 提示默认值与占位符写法），随站点设置一并保存（saveSettings keys + bootstrap 回填）。
+- 测试：server/scripts/smoke-admin.mjs /site 键存在性加 `footerText`；站点配置段新增 3 项——自定义文案+`{year}` 渲染正确、置空回退内置默认（`{site}` 取当前站点标题）、测后还原测试前原值（恢复现场纪律）。
+- 验证：smoke-admin **51/0**、smoke-auth 13/0、smoke-articles 22/0、e2e-mail-tpl 19/0；`npm run build` 0 错误（AdminView 21.54kB）。后端已重启（health ok）。
+- 备注：改动未提交（用户未要求）。
+
+## 43. 回退页脚小字改关于页副标题 + 修复「已删用户又出现」（测试残留自清理）
+
+- 背景：用户指出第 42 轮理解错位置——要改的不是关于页底部页脚，而是标题「关于」下方的小字「一个会发光的角落」；同时报告「刚删除的部分用户刷新后又出现」。
+- 回退 footer_text 全链路（第 42 轮）：server/src/services/settings.js 删 `footer_text` 默认项与 `renderFooter()`，`publicSiteInfo` 改回不含 footerText；web/src/stores/site.ts `SiteInfo` 删 `footerText`；web/src/views/AboutView.vue footer 恢复硬编码 `© {{ year }} {{ site.info.title }} · ShimmerBlog`（加回 `year` 常量）；web/src/views/AdminView.vue 删「页脚小字」输入框（siteForm/saveSettings keys/bootstrap 回填四处）。库内 `settings` 表 `footer_text` 残留行已清理。
+- 新增关于页副标题：settings.js `DEFAULTS` 加 `about_subtitle: '一个会发光的角落'`（`setSettings` 白名单自动生效），`publicSiteInfo` 返回 `aboutSubtitle`（空值回退内置文案）；AboutView 标题下小字改渲染 `site.info.aboutSubtitle`；site.ts `SiteInfo.aboutSubtitle`（兜底同默认）；AdminView「站点」页新增「关于页副标题」输入框（留空用默认），随站点设置一并保存。
+- 「已删用户又出现」根因：**不是删除缺陷，是测试脚本每轮回归重建同名用户且不自清理**——smoke-auth.mjs 留 `tester-*`（改名「改名后的用户」）与 `magic-*`、smoke-articles.mjs 留 `writerA_*/writerB_*`、e2e-mail-tpl.mjs 留 `e2e-welcome-*`；用户删掉后下一次回归又出现同名新账号。第 41 轮批量删除实测 12/12 消失的结论仍成立（后端硬删除无缺陷）。当场清理库内 5 个残留（id 199–203），现库仅剩 admin。
+- 修复（测试脚本自清理纪律）：smoke-auth.mjs 结尾 SQL 删除 `MAIL`/`magicMail` 用户；smoke-articles.mjs 结尾经 `/auth/me` 取 id 后用 admin API 删除 writerA/B（+2 项）；e2e-mail-tpl.mjs 还原模板后用 admin API 删除注册的 e2e 用户（+1 项）；smoke-admin.mjs 清理列表原已完备。新增 server/scripts/cleanup-test-users.mjs 兜底清理脚本（按邮箱后缀 `@test.local`/`@shimmer.dev`/`e2e-welcome-` 前缀批量删除，文章随外键级联）。
+- 验证：smoke-admin **51/0**（页脚 3 项改关于页副标题 3 项：自定义生效/置空回退默认/还原原值）、smoke-auth 13/0、smoke-articles **24/0**、e2e-mail-tpl **20/0**（含「清理 e2e 测试用户」）；全量回归跑完后 `cleanup-test-users.mjs` 报「无测试残留用户」（自清理生效，不再污染生产库）；`npm run build` 0 错误（AdminView 21.56kB）。后端已重启（health ok）。
+- 备注：改动未提交（用户未要求）。
+- 补充（同轮）：应用户要求移除顶栏「后台」入口按钮（web/src/components/TopBar.vue 删 router-link 及 .admin-link 样式）；/admin 路由保留，直接访问 URL 仍可进入后台。build 0 错误（1.23s）。

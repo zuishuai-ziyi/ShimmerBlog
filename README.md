@@ -59,7 +59,7 @@ cd ../server && npm start
 cd ../web && npm run dev
 ```
 
-打开 http://127.0.0.1:5180/ 。默认管理员：`admin@shimmerblog.local` / `shimmer-admin`（**登录后请立即在控制台改密码或改昵称**）。
+打开 http://127.0.0.1:5180/ 。后台登录密码初始为 server/.env 的 `ADMIN_PASSWORD`（开发默认 `shimmer-admin`；首次启动自动以它种子到数据库，之后以数据库为准），登录后台后请在「站点设置 → 修改密码」中立即更换。
 
 ### `.env` 两个坑
 
@@ -82,6 +82,7 @@ cd ../web && npm run dev
 | `web_origin` | 第三方登录回调后跳回的前端地址（生产环境改成你的域名） |
 
 - 后台存的值优先于 `.env`；密钥字段读接口只返回掩码（`__KEEP__` 表示保持原值，`__CLEAR__` 表示清空）。
+- **关于页副标题**：后台「站点」页可自定义关于页标题下方的副标题（`about_subtitle`）；留空时使用内置默认「一个会发光的角落」。
 - **站点 Logo / 用户默认头像**：后台「站点」页上传（`POST/DELETE /api/admin/logo`、`POST/DELETE /api/admin/default-avatar`）。默认头像对所有无头像用户生效（文章卡/文章页/顶栏/控制台/空间页统一回退到 `GET /api/site` 的 `defaultAvatarUrl`）；未设置时使用内置 `web/src/assets/default-avatar.svg`。
 - **GitHub OAuth**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，
   Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`），把 Client ID / Secret 填进站点配置即可。
@@ -94,7 +95,7 @@ cd ../web && npm run dev
 | 方法 & 路径 | 说明 |
 | --- | --- |
 | `GET /api/health` | 健康检查（含数据库连通性） |
-| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 是否可用） |
+| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 是否可用/关于页副标题 aboutSubtitle） |
 | `POST /api/auth/register` | 邮箱 + 密码注册 |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
 | `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `reset`，`reset` 仅向已注册邮箱发送） |
@@ -126,9 +127,9 @@ cd ../web && npm run dev
 ```bash
 cd server
 node scripts/smoke-auth.mjs       # 13 项：注册/登录/验证码/OAuth 占位/头像/改名
-node scripts/smoke-articles.mjs   # 22 项：草稿可见性/权限/分页/置顶/图片上传
+node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 48 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/注册开关/邮件模板元数据
-node scripts/e2e-mail-tpl.mjs     # 17 项：邮件模板全自定义（元数据/持久化/渲染/恢复默认）
+node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）
 cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 ```
 
