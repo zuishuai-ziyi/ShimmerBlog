@@ -8,19 +8,13 @@
         </button>
       </div>
 
-      <!-- 登录方式切换 -->
-      <div v-if="mode === 'login'" class="sub-tabs">
-        <button type="button" :class="{ on: way === 'password' }" @click="way = 'password'">密码登录</button>
-        <button type="button" :class="{ on: way === 'code' }" @click="way = 'code'">验证码登录</button>
-      </div>
-
       <form @submit.prevent="submit">
         <div class="field">
           <label>邮箱</label>
           <input v-model.trim="form.email" type="email" placeholder="you@example.com" autocomplete="email" required />
         </div>
 
-        <div v-if="mode === 'register' || way === 'password'" class="field">
+        <div class="field">
           <label>密码</label>
           <input
             v-model="form.password"
@@ -36,23 +30,14 @@
           <input v-model.trim="form.name" type="text" placeholder="留空则用邮箱前缀" maxlength="50" />
         </div>
 
-        <div v-if="mode === 'login' && way === 'code'" class="field">
-          <label>验证码</label>
-          <div class="code-row">
-            <input v-model.trim="form.code" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字" />
-            <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
-              {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
-            </button>
-          </div>
-          <p v-if="devCode" class="dev-tip">开发模式验证码：<strong>{{ devCode }}</strong></p>
-        </div>
-
         <p v-if="error" class="error-tip">{{ error }}</p>
         <p v-if="notice" class="notice">{{ notice }}</p>
 
         <button class="btn submit" type="submit" :disabled="loading">
           {{ loading ? '处理中…' : mode === 'register' ? '注册并登录' : '登录' }}
         </button>
+
+        <p v-if="mode === 'login'" class="forgot-tip">忘记密码？验证邮箱后即可恢复密码</p>
       </form>
 
       <div v-if="site.info.githubEnabled" class="third">
@@ -72,7 +57,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, reactive, ref, onBeforeUnmount } from 'vue';
+import { computed, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
@@ -84,17 +69,10 @@ const auth = useAuthStore();
 const site = useSiteStore();
 
 const mode = ref<'login' | 'register'>('login');
-const way = ref<'password' | 'code'>('password');
 const loading = ref(false);
-const sending = ref(false);
 const error = ref('');
 const notice = ref('');
-const devCode = ref('');
-const form = reactive({ email: '', password: '', name: '', code: '' });
-
-const counting = ref(false);
-const countdown = ref(0);
-let timer: ReturnType<typeof setInterval> | null = null;
+const form = reactive({ email: '', password: '', name: '' });
 
 if (!site.loaded) site.fetch();
 
@@ -107,7 +85,6 @@ function switchMode(m: 'login' | 'register') {
   mode.value = m;
   error.value = '';
   notice.value = '';
-  devCode.value = '';
 }
 
 async function submit() {
@@ -126,13 +103,7 @@ async function submit() {
       router.replace(redirect.value);
       return;
     }
-    if (way.value === 'password') {
-      const { data } = await http.post('/auth/login', { email: form.email, password: form.password });
-      await auth.setToken(data.token);
-      router.replace(redirect.value);
-      return;
-    }
-    const { data } = await http.post('/auth/login/code', { email: form.email, code: form.code });
+    const { data } = await http.post('/auth/login', { email: form.email, password: form.password });
     await auth.setToken(data.token);
     router.replace(redirect.value);
   } catch (e) {
@@ -141,39 +112,6 @@ async function submit() {
     loading.value = false;
   }
 }
-
-async function sendCode() {
-  if (!form.email) {
-    error.value = '请先填写邮箱';
-    return;
-  }
-  sending.value = true;
-  error.value = '';
-  try {
-    const { data } = await http.post('/auth/send-code', { email: form.email, purpose: 'login' });
-    notice.value = '验证码已发送，10 分钟内有效';
-    devCode.value = data.devCode || '';
-    counting.value = true;
-    countdown.value = 60;
-    timer && clearInterval(timer);
-    timer = setInterval(() => {
-      countdown.value -= 1;
-      if (countdown.value <= 0) {
-        counting.value = false;
-        timer && clearInterval(timer);
-        timer = null;
-      }
-    }, 1000);
-  } catch (e) {
-    error.value = errMsg(e);
-  } finally {
-    sending.value = false;
-  }
-}
-
-onBeforeUnmount(() => {
-  if (timer) clearInterval(timer);
-});
 </script>
 
 <style scoped>
@@ -213,39 +151,11 @@ onBeforeUnmount(() => {
   border-bottom-color: var(--accent);
 }
 
-.sub-tabs {
-  display: flex;
-  gap: 8px;
-  margin-bottom: 18px;
-}
-
-.sub-tabs button {
-  padding: 6px 14px;
+.forgot-tip {
+  margin-top: 14px;
   font-size: 13px;
   color: var(--text-dim);
-  background: rgba(140, 198, 226, 0.08);
-  border: 1px solid transparent;
-  border-radius: 999px;
-}
-
-.sub-tabs button.on {
-  color: var(--accent);
-  border-color: var(--glass-border);
-  background: rgba(140, 198, 226, 0.18);
-}
-
-.code-row {
-  display: flex;
-  gap: 10px;
-}
-
-.code-row input {
-  flex: 1;
-}
-
-.code-row button {
-  flex: none;
-  white-space: nowrap;
+  text-align: center;
 }
 
 .submit {
@@ -259,12 +169,6 @@ onBeforeUnmount(() => {
   font-size: 13px;
   color: var(--accent);
   margin-top: 8px;
-}
-
-.dev-tip {
-  margin-top: 8px;
-  font-size: 12.5px;
-  color: var(--accent);
 }
 
 .third {
