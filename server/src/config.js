@@ -13,9 +13,7 @@ export const config = {
     database: env('DB_NAME', 'shimmerblog'),
   },
   admin: {
-    email: env('ADMIN_EMAIL', 'admin@shimmerblog.local'),
     password: env('ADMIN_PASSWORD', 'shimmer-admin'),
-    name: env('ADMIN_NAME', '管理员'),
   },
   github: {
     clientId: env('GITHUB_CLIENT_ID'),

@@ -2,7 +2,7 @@ import jwt from 'jsonwebtoken';
 import { config } from './config.js';
 
 export function signToken(user) {
-  return jwt.sign({ uid: user.id, role: user.role }, config.jwtSecret, { expiresIn: '7d' });
+  return jwt.sign({ uid: user.id }, config.jwtSecret, { expiresIn: '7d' });
 }
 
 /** 后台独立令牌（12 小时），与用户 token 分离 */
@@ -19,7 +19,6 @@ export function publicUser(u) {
     name_color: u.name_color || null,
     avatar_url: u.avatar_url,
     bio: u.bio || '',
-    role: u.role,
     status: u.status,
     github_id: u.github_id,
     email_verified: !!u.email_verified,

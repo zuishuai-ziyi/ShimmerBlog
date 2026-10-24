@@ -34,8 +34,8 @@ authRouter.post('/register', async (req, res, next) => {
     if (exists.length > 0) return res.status(409).json({ error: '该邮箱已注册' });
     const hash = await bcrypt.hash(password, 10);
     const [r] = await pool.query(
-      'INSERT INTO users (email, password_hash, name, role, email_verified) VALUES (?, ?, ?, ?, 0)',
-      [email, hash, nick, 'user']
+      'INSERT INTO users (email, password_hash, name, email_verified) VALUES (?, ?, ?, 0)',
+      [email, hash, nick]
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     res.status(201).json({ token: signToken(rows[0]), user: publicUser(rows[0]) });
@@ -125,8 +125,8 @@ authRouter.post('/login/code', async (req, res, next) => {
       // 验证码首次登录 = 自动注册（免密账号）
       const nick = mail.split('@')[0].slice(0, 50);
       const [r] = await pool.query(
-        'INSERT INTO users (email, name, role, email_verified) VALUES (?, ?, ?, 1)',
-        [mail, nick, 'user']
+        'INSERT INTO users (email, name, email_verified) VALUES (?, ?, 1)',
+        [mail, nick]
       );
       const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
       user = created[0];
@@ -240,8 +240,8 @@ authRouter.get('/github/callback', async (req, res) => {
     if (!user) {
       const nick = String(ghUser.name || ghUser.login || 'github 用户').slice(0, 50);
       const [r] = await pool.query(
-        'INSERT INTO users (email, name, avatar_url, role, github_id, email_verified) VALUES (?, ?, ?, ?, ?, 1)',
-        [email, nick, ghUser.avatar_url || null, 'user', ghUser.id]
+        'INSERT INTO users (email, name, avatar_url, github_id, email_verified) VALUES (?, ?, ?, ?, 1)',
+        [email, nick, ghUser.avatar_url || null, ghUser.id]
       );
       const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
       user = created[0];

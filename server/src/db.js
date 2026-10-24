@@ -19,7 +19,6 @@ CREATE TABLE IF NOT EXISTS users (
   name_color VARCHAR(20) NULL,
   bio VARCHAR(500) NULL,
   permissions JSON NULL,
-  role ENUM('user','admin') NOT NULL DEFAULT 'user',
   status ENUM('active','disabled') NOT NULL DEFAULT 'active',
   github_id BIGINT UNSIGNED NULL UNIQUE,
   email_verified TINYINT(1) NOT NULL DEFAULT 0,

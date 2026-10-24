@@ -8,7 +8,6 @@ export interface User {
   name_color: string | null;
   bio: string | null;
   avatar_url: string | null;
-  role: 'user' | 'admin';
   email_verified: number;
 }
 
