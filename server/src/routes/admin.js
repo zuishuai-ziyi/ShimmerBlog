@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
 import { signAdminToken } from '../utils.js';
-import { getAllSettings, setSettings, githubConfig, smtpConfig, MAIL_TEMPLATES } from '../services/settings.js';
+import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES } from '../services/settings.js';
 import { sendTestEmail } from '../services/mailer.js';
 import { makeLimiter } from '../utils.js';
 import { imageUpload } from '../uploads.js';
@@ -168,12 +168,14 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
   try {
     const all = await getAllSettings();
     const gh = await githubConfig();
+    const gg = await googleConfig();
     const smtp = await smtpConfig();
     res.json({
       settings: {
         ...all,
         // 密钥不回传明文，只回传是否已配置
         github_client_secret: all.github_client_secret ? '__KEEP__' : '',
+        google_client_secret: all.google_client_secret ? '__KEEP__' : '',
         smtp_pass: all.smtp_pass ? '__KEEP__' : '',
       },
       // 邮件模板元数据：前端据此渲染每种邮件的编辑器（含占位符提示与内置默认值）
@@ -188,6 +190,7 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
         defaultBody: t.defaults.body,
       })),
       githubEnabled: gh.enabled,
+      googleEnabled: gg.enabled,
       smtpEnabled: !!smtp,
     });
   } catch (e) {
@@ -199,7 +202,7 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
   try {
     const body = { ...(req.body ?? {}) };
     // 密钥：'__KEEP__' 与空串都表示「不修改」，'__CLEAR__' 才是清空
-    for (const key of ['github_client_secret', 'smtp_pass']) {
+    for (const key of ['github_client_secret', 'google_client_secret', 'smtp_pass']) {
       if (body[key] === '__KEEP__' || body[key] === '') delete body[key];
       else if (body[key] === '__CLEAR__') body[key] = '';
     }
@@ -213,8 +216,9 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     if (typeof body.smtp_secure === 'boolean') body.smtp_secure = body.smtp_secure ? '1' : '0';
     const r = await setSettings(body);
     const gh = await githubConfig();
+    const gg = await googleConfig();
     const smtp = await smtpConfig();
-    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, smtpEnabled: !!smtp });
+    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp });
   } catch (e) {
     next(e);
   }

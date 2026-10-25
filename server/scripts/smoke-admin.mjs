@@ -155,6 +155,20 @@ async function main() {
   const cleared = await req('GET', '/admin/settings', { token: adminToken });
   check('__CLEAR__ 清空 secret', cleared.data?.settings?.github_client_secret === '', String(cleared.data?.settings?.github_client_secret));
 
+  console.log('\n== 第三方登录配置（第 48 轮） ==');
+  check('配置返回 githubEnabled/googleEnabled', 'githubEnabled' in getSet.data && 'googleEnabled' in getSet.data);
+  check('公开 /site 含 googleEnabled', 'googleEnabled' in (await req('GET', '/site')).data);
+  await req('PUT', '/admin/settings', { token: adminToken, body: { google_client_id: 'test-google-id', google_client_secret: 'test-google-secret' } });
+  const gMasked = await req('GET', '/admin/settings', { token: adminToken });
+  check('google secret 掩码 __KEEP__', gMasked.data?.settings?.google_client_secret === '__KEEP__', String(gMasked.data?.settings?.google_client_secret));
+  check('id+secret 齐后 googleEnabled=true', gMasked.data?.googleEnabled === true);
+  check('公开 /site googleEnabled=true', (await req('GET', '/site')).data?.googleEnabled === true);
+  const gAuth = await fetch(`${BASE}/auth/google`, { redirect: 'manual' });
+  check('已配置后 /auth/google 302 到 Google', gAuth.status === 302 && String(gAuth.headers.get('location') || '').includes('accounts.google.com'), `${gAuth.status} ${gAuth.headers.get('location')}`);
+  await req('PUT', '/admin/settings', { token: adminToken, body: { google_client_id: '', google_client_secret: '__CLEAR__' } });
+  const gCleared = await req('GET', '/admin/settings', { token: adminToken });
+  check('清理后 googleEnabled=false', gCleared.data?.googleEnabled === false, String(gCleared.data?.googleEnabled));
+
   const newTitle = `微光博客·${rnd()}`;
   const put = await req('PUT', '/admin/settings', { token: adminToken, body: { site_title: newTitle, github_client_secret: '__KEEP__' } });
   check('保存配置 200', put.status === 200, JSON.stringify(put.data));

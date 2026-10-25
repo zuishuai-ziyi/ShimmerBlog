@@ -5,7 +5,7 @@ import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
 import { sendCodeEmail, sendWelcomeEmail } from '../services/mailer.js';
-import { githubConfig, webOrigin, getSetting } from '../services/settings.js';
+import { githubConfig, googleConfig, webOrigin, getSetting } from '../services/settings.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
 
@@ -13,11 +13,36 @@ export const authRouter = Router();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-/** GitHub OAuth state（10 分钟有效，单实例内存即可） */
-const githubStates = new Map();
+/** OAuth state（GitHub / Google 共用，10 分钟有效，单实例内存即可） */
+const oauthStates = new Map();
 
-function githubRedirectUri(req) {
-  return `${req.protocol}://${req.get('host')}/api/auth/github/callback`;
+function oauthCallbackUri(req, provider) {
+  return `${req.protocol}://${req.get('host')}/api/auth/${provider}/callback`;
+}
+
+/** 第三方登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱） */
+async function findOrCreateOAuthUser(providerCol, providerId, { email, name, avatar }) {
+  const [byPid] = await pool.query(`SELECT * FROM users WHERE \`${providerCol}\` = ? LIMIT 1`, [providerId]);
+  let user = byPid[0];
+  let createdNew = false;
+  if (!user && email) {
+    const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
+    user = byEmail[0];
+    if (user) {
+      await pool.query(`UPDATE users SET \`${providerCol}\` = ? WHERE id = ?`, [providerId, user.id]);
+    }
+  }
+  if (!user) {
+    const nick = String(name || '第三方用户').slice(0, 50);
+    const [r] = await pool.query(
+      `INSERT INTO users (email, name, avatar_url, \`${providerCol}\`, email_verified) VALUES (?, ?, ?, ?, 1)`,
+      [email, nick, avatar || null, providerId]
+    );
+    const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
+    user = created[0];
+    createdNew = true;
+  }
+  return { user, createdNew };
 }
 
 /* ---------- 注册（邮箱 + 密码） ---------- */
@@ -210,10 +235,10 @@ authRouter.get('/github', async (req, res) => {
     });
   }
   const state = crypto.randomBytes(16).toString('hex');
-  githubStates.set(state, Date.now() + 10 * 60 * 1000);
+  oauthStates.set(state, Date.now() + 10 * 60 * 1000);
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', githubRedirectUri(req));
+  url.searchParams.set('redirect_uri', oauthCallbackUri(req, 'github'));
   url.searchParams.set('scope', 'read:user user:email');
   url.searchParams.set('state', state);
   res.redirect(url.toString());
@@ -221,8 +246,8 @@ authRouter.get('/github', async (req, res) => {
 
 authRouter.get('/github/callback', async (req, res) => {
   const { code, state } = req.query;
-  const expires = typeof state === 'string' ? githubStates.get(state) : undefined;
-  githubStates.delete(String(state ?? ''));
+  const expires = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  oauthStates.delete(String(state ?? ''));
   if (typeof code !== 'string' || !expires || Date.now() > expires) {
     return res.status(400).json({ error: 'GitHub 回调参数无效或 state 已过期' });
   }
@@ -233,7 +258,7 @@ authRouter.get('/github/callback', async (req, res) => {
     const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: githubRedirectUri(req) }),
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: oauthCallbackUri(req, 'github') }),
     });
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) {
@@ -249,33 +274,85 @@ authRouter.get('/github/callback', async (req, res) => {
     const ghEmails = ghEmailsRes.ok ? await ghEmailsRes.json() : [];
     const email = ghEmails.find((e) => e.primary && e.verified)?.email || ghUser.email || null;
 
-    // 按 github_id 找老用户；否则按邮箱并档；否则新建
-    const [byGh] = await pool.query('SELECT * FROM users WHERE github_id = ? LIMIT 1', [ghUser.id]);
-    let user = byGh[0];
-    let createdNew = false;
-    if (!user && email) {
-      const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
-      user = byEmail[0];
-      if (user) {
-        await pool.query('UPDATE users SET github_id = ? WHERE id = ?', [ghUser.id, user.id]);
-      }
-    }
-    if (!user) {
-      const nick = String(ghUser.name || ghUser.login || 'github 用户').slice(0, 50);
-      const [r] = await pool.query(
-        'INSERT INTO users (email, name, avatar_url, github_id, email_verified) VALUES (?, ?, ?, ?, 1)',
-        [email, nick, ghUser.avatar_url || null, ghUser.id]
-      );
-      const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
-      user = created[0];
-      createdNew = true;
-    }
+    const { user, createdNew } = await findOrCreateOAuthUser('github_id', ghUser.id, {
+      email: email ? String(email).toLowerCase() : null,
+      name: String(ghUser.name || ghUser.login || 'github 用户'),
+      avatar: ghUser.avatar_url,
+    });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
     if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
     const origin = await webOrigin();
     res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
   } catch (e) {
     res.status(502).json({ error: 'GitHub OAuth 处理失败', detail: String(e) });
+  }
+});
+
+/* ---------- Google OAuth（OIDC） ---------- */
+authRouter.get('/google', async (req, res) => {
+  const g = await googleConfig();
+  if (!g.clientId || !g.clientSecret) {
+    return res.status(501).json({
+      error: 'Google 登录未配置：请在后台「第三方登录」填写 Client ID / Client Secret',
+    });
+  }
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, Date.now() + 10 * 60 * 1000);
+  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  url.searchParams.set('client_id', g.clientId);
+  url.searchParams.set('redirect_uri', oauthCallbackUri(req, 'google'));
+  url.searchParams.set('response_type', 'code');
+  url.searchParams.set('scope', 'openid email profile');
+  url.searchParams.set('state', state);
+  res.redirect(url.toString());
+});
+
+authRouter.get('/google/callback', async (req, res) => {
+  const { code, state } = req.query;
+  const expires = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  oauthStates.delete(String(state ?? ''));
+  if (typeof code !== 'string' || !expires || Date.now() > expires) {
+    return res.status(400).json({ error: 'Google 回调参数无效或 state 已过期' });
+  }
+  const g = await googleConfig();
+  if (!g.clientId || !g.clientSecret) return res.status(501).json({ error: 'Google 登录未配置' });
+  try {
+    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
+      body: new URLSearchParams({
+        code,
+        client_id: g.clientId,
+        client_secret: g.clientSecret,
+        redirect_uri: oauthCallbackUri(req, 'google'),
+        grant_type: 'authorization_code',
+      }),
+    });
+    const tokenData = await tokenRes.json();
+    if (!tokenData.access_token) {
+      return res.status(400).json({ error: 'Google 授权失败', detail: tokenData });
+    }
+    const uiRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+      headers: { Authorization: `Bearer ${tokenData.access_token}` },
+    });
+    if (!uiRes.ok) {
+      return res.status(502).json({ error: '获取 Google 用户信息失败', detail: uiRes.status });
+    }
+    const ui = await uiRes.json();
+    // 只信任 Google 明确标注已验证的邮箱
+    const email = ui.email && ui.email_verified ? String(ui.email).toLowerCase() : null;
+
+    const { user, createdNew } = await findOrCreateOAuthUser('google_id', String(ui.sub), {
+      email,
+      name: String(ui.name || 'google 用户'),
+      avatar: ui.picture,
+    });
+    if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+    if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
+    const origin = await webOrigin();
+    res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
+  } catch (e) {
+    res.status(502).json({ error: 'Google OAuth 处理失败', detail: String(e) });
   }
 });
 

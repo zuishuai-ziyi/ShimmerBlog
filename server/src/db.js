@@ -21,6 +21,7 @@ CREATE TABLE IF NOT EXISTS users (
   permissions JSON NULL,
   status ENUM('active','disabled') NOT NULL DEFAULT 'active',
   github_id BIGINT UNSIGNED NULL UNIQUE,
+  google_id VARCHAR(255) NULL UNIQUE,
   email_verified TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
   updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP
@@ -94,6 +95,7 @@ export async function initDatabase() {
   await ensureColumn('users', 'name_color', 'name_color VARCHAR(20) NULL AFTER avatar_url');
   await ensureColumn('users', 'bio', 'bio VARCHAR(500) NULL AFTER name_color');
   await ensureColumn('users', 'permissions', 'permissions JSON NULL AFTER bio');
+  await ensureColumn('users', 'google_id', 'google_id VARCHAR(255) NULL UNIQUE AFTER github_id');
   await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login'").catch(() => {});
   // 彻底删除历史「已注销」存量行（含级联文章），再把 status 枚举回退为两态
   await pool.query("DELETE FROM users WHERE status = 'deleted'").catch(() => {});

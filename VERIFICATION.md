@@ -459,3 +459,19 @@
 - 验证方式：`curl -H "Host: blog.xiaoziyi.com" http://192.140.166.198:81/` → 200 且返回 1105 B 的 SPA index（`<title>微光博客</title>`）、`/api/health` → `{"ok":true,"db":true}`、深链 `/about` → 200。不带 Host 头访问 IP:81 会落到 nginx 默认 server 而 404，属预期（`server_name` 只匹配域名）。
 - 待用户在宝塔/域名侧完成（不涉及仓库）：①DNS A 记录 `blog.xiaoziyi.com → 192.140.166.198`；②站点绑定域名 + 申请 SSL；③80/443 目前被 `SamWafLinux64` 占用，需在 SamWaf 里加站点反代到 `127.0.0.1:81`（或调整端口占用）；④防火墙放行 80/443（3010 不必对外，已被 nginx 反代）。
 
+
+## 48. 后台「第三方登录」管理 + Google OAuth 登录（登录页/注册页第三方按钮）
+
+- 背景：用户要求「后台新增第三方登录管理功能，允许管理员使用 Web UI 直接管理第三方登录，如 Github 和 Google 登录」。此前 GitHub OAuth 只有后端实现，后台 UI 无任何配置入口（库里 `github_client_id/secret` 一直为空 → 登录页按钮从不显示）。
+- 后端：
+  - `users` 表新增 `google_id VARCHAR(255) NULL UNIQUE`（`SCHEMA_SQL` + `ensureColumn` 老库补列，启动时自动执行）。
+  - `server/src/config.js` 新增 `google` 段（`GOOGLE_CLIENT_ID/SECRET` 环境变量）；`settings.js` `DEFAULTS` 新增 `google_client_id/secret` 两键（即写白名单），新增 `googleConfig()`（后台配置优先、环境变量兜底），`publicSiteInfo()` 增加 `googleEnabled`。
+  - `server/src/routes/auth.js`：GitHub/Google 共用 state 池 `oauthStates` 与回调地址函数 `oauthCallbackUri(req, provider)`；抽出共用 `findOrCreateOAuthUser(providerCol, providerId, {email,name,avatar})`（按第三方 id 找老用户 → 按已验证邮箱并档 → 新建并 `email_verified=1`），GitHub 回调改走该函数（行为不变，邮箱额外 lowercase 归一）；新增 `GET /api/auth/google`（302 → `accounts.google.com/o/oauth2/v2/auth`，scope `openid email profile`）与 `GET /api/auth/google/callback`（token 端点 `oauth2.googleapis.com/token`，userinfo `openidconnect.googleapis.com/v1/userinfo`，只信 `email_verified=true` 的邮箱），成功后同样带 token 跳回 `web_origin/auth/callback`；未配置 501。
+  - `server/src/routes/admin.js`：`GET/PUT /admin/settings` 支持掩码 `google_client_secret`（`__KEEP__`/空串不覆盖、`__CLEAR__` 清空），响应新增 `googleEnabled`。
+- 前端：
+  - `AdminView.vue` 新增「第三方登录」tab：GitHub / Google 两张卡片，各含生效状态（●/○）、回调地址提示（`window.location.origin` 自动区分本地/线上，附 GitHub/Google 控制台链接）、Client ID、Client Secret（密码框，已配置显示「留空保持不变」）；一次保存 4 键并同步 enabled 状态。用户列表第三方标记支持 `· Google`。
+  - `LoginView.vue`：第三方区在任一 provider 启用时显示；按钮抽出公共样式 `.btn-third`（玻璃底胶囊，同 hover），新增 Google 四色 G logo 按钮，文案同样随登录/注册 tab 变化（「使用 Google 登录/注册」）。
+  - `stores/site.ts` 增加 `googleEnabled`。
+- 回归（本地后端 3010，Windows node）：smoke-admin **58/0**（新增 7 项：配置返回 enabled 字段、公开 /site 含 googleEnabled、google secret 掩码、id+secret 齐后 googleEnabled=true、/site 同步、/auth/google 302 → accounts.google.com、清理后回 false）；smoke-auth **19/0**（新增 google 501 与 callback bad state 400）；smoke-articles 24/0；e2e-mail-tpl 20/0；cleanup-test-users 无残留；`npm run build` 通过。
+- 事故记录：本地 3010 被上一轮会话遗留的旧 node 进程（PID 32096，今晨 0:19 启动）占用，Windows 下新进程 bind 成功但流量仍进旧进程（`/api/site` 一直缺 `googleEnabled`）——与第 46 轮远端「残留进程占 3010」教训同款；杀掉旧进程重启后恢复。本地验证一律先 `Get-Process node` 查旧进程。
+- 待办（需用户在控制台创建凭据，仓库侧已就绪）：GitHub OAuth App（callback `https://blog.xiaoziyi.com/api/auth/github/callback`）与 Google OAuth 客户端（redirect URI `.../api/auth/google/callback`），凭据直接填进后台「第三方登录」页即可上线。

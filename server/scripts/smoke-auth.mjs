@@ -82,6 +82,13 @@ ok('github 501 placeholder', r.status === 501 && ghText.includes('未配置'), g
 r = await fetch(`${B}/github/callback?code=abc&state=badstate123`);
 ok('github callback bad state 400', r.status === 400);
 
+r = await fetch(`${B}/google`, { redirect: 'manual' });
+const ggText = await r.text();
+ok('google 501 placeholder', r.status === 501 && ggText.includes('未配置'), ggText.slice(0, 40));
+
+r = await fetch(`${B}/google/callback?code=abc&state=badstate456`);
+ok('google callback bad state 400', r.status === 400);
+
 // 头像上传（1x1 png）
 const png = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
 const fd = new FormData();

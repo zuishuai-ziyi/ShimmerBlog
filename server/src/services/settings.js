@@ -30,6 +30,8 @@ const DEFAULTS = {
   smtp_from: '',
   github_client_id: '',
   github_client_secret: '',
+  google_client_id: '',
+  google_client_secret: '',
   web_origin: 'http://localhost:5180',
   register_open: '1',
 };
@@ -75,6 +77,13 @@ export async function setSettings(patch) {
 export async function githubConfig() {
   const id = (await getSetting('github_client_id')) || config.github.clientId;
   const secret = (await getSetting('github_client_secret')) || config.github.clientSecret;
+  return { clientId: id, clientSecret: secret, enabled: !!(id && secret) };
+}
+
+/** Google OAuth 生效配置：后台配置优先，其次环境变量 */
+export async function googleConfig() {
+  const id = (await getSetting('google_client_id')) || config.google.clientId;
+  const secret = (await getSetting('google_client_secret')) || config.google.clientSecret;
   return { clientId: id, clientSecret: secret, enabled: !!(id && secret) };
 }
 
@@ -167,6 +176,7 @@ export async function mailTemplate(kind, vars = {}) {
 export async function publicSiteInfo() {
   const all = await getAllSettings();
   const gh = await githubConfig();
+  const gg = await googleConfig();
   const title = all.site_title;
   return {
     title,
@@ -178,5 +188,6 @@ export async function publicSiteInfo() {
     aboutSubtitle: all.about_subtitle || '一个会发光的角落',
     registerOpen: all.register_open === '1',
     githubEnabled: gh.enabled,
+    googleEnabled: gg.enabled,
   };
 }

@@ -32,6 +32,7 @@
         <nav>
           <button :class="{ on: tab === 'site' }" @click="tab = 'site'">站点</button>
           <button :class="{ on: tab === 'mail' }" @click="tab = 'mail'">邮件</button>
+          <button :class="{ on: tab === 'oauth' }" @click="tab = 'oauth'">第三方登录</button>
           <button :class="{ on: tab === 'users' }" @click="tab = 'users'">用户</button>
           <button :class="{ on: tab === 'articles' }" @click="tab = 'articles'">文章</button>
         </nav>
@@ -159,6 +160,38 @@
             </div>
           </section>
 
+          <!-- ============ 第三方登录 ============ -->
+          <section v-if="tab === 'oauth'" class="pane">
+            <div class="card">
+              <h2>GitHub 登录</h2>
+              <p class="hint status" :class="{ ok: githubEnabled }">{{ githubEnabled ? '● 已配置，登录页展示 GitHub 按钮' : '○ 未配置（配置后登录页自动展示）' }}</p>
+              <p class="hint">
+                在 <a :href="ghAppUrl" target="_blank" rel="noopener">GitHub OAuth Apps</a> 创建应用，
+                授权回调地址填：<code>{{ callbackBase }}/api/auth/github/callback</code>
+              </p>
+              <label class="row"><span>Client ID</span><input v-model.trim="oauthForm.github_client_id" placeholder="Ov23li… / Iv1.…" autocomplete="off" /></label>
+              <label class="row"><span>Client Secret</span><input v-model="oauthForm.github_client_secret" type="password" :placeholder="ghSecretSet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
+            </div>
+
+            <div class="card">
+              <h2>Google 登录</h2>
+              <p class="hint status" :class="{ ok: googleEnabled }">{{ googleEnabled ? '● 已配置，登录页展示 Google 按钮' : '○ 未配置（配置后登录页自动展示）' }}</p>
+              <p class="hint">
+                在 <a :href="ggAppUrl" target="_blank" rel="noopener">Google Cloud 控制台</a> 创建 OAuth 客户端（Web 应用），
+                已获授权的重定向 URI 填：<code>{{ callbackBase }}/api/auth/google/callback</code>
+              </p>
+              <label class="row"><span>Client ID</span><input v-model.trim="oauthForm.google_client_id" placeholder="xxxxx.apps.googleusercontent.com" autocomplete="off" /></label>
+              <label class="row"><span>Client Secret</span><input v-model="oauthForm.google_client_secret" type="password" :placeholder="ggSecretSet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
+            </div>
+
+            <div class="ops">
+              <button class="primary" :disabled="saving" @click="saveOauthSettings">
+                {{ saving ? '保存中…' : '保存第三方登录设置' }}
+              </button>
+              <span v-if="flash" class="flash">{{ flash }}</span>
+            </div>
+          </section>
+
           <!-- ============ 用户 ============ -->
           <section v-if="tab === 'users'" class="pane">
             <div class="card">
@@ -179,7 +212,7 @@
                           <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
                           <div>
                             <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
-                            <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template></div>
+                            <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template><template v-if="u.google_id"> · Google</template></div>
                           </div>
                         </div>
                       </td>
@@ -292,7 +325,7 @@ const admin = useAdminStore();
 // 已有本地令牌时先进入「验证中」态，避免过期令牌先渲染后台内容再跳回登录门
 const booting = ref(!!admin.token && !admin.checked);
 
-type Tab = 'site' | 'mail' | 'users' | 'articles';
+type Tab = 'site' | 'mail' | 'oauth' | 'users' | 'articles';
 const tab = ref<Tab>('site');
 
 /* ---- 登录门 ---- */
@@ -356,6 +389,15 @@ function showFlash(msg: string) {
 }
 
 const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '' });
+const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '' });
+const githubEnabled = ref(false);
+const googleEnabled = ref(false);
+const ghSecretSet = ref(false);
+const ggSecretSet = ref(false);
+// 回调地址随访问后台的地址走（本地 5180 / 线上域名自动切换）
+const callbackBase = window.location.origin;
+const ghAppUrl = 'https://github.com/settings/developers';
+const ggAppUrl = 'https://console.cloud.google.com/apis/credentials';
 
 /** 后端返回的邮件模板元数据（每种邮件一份：标签 / 占位符 / 内置默认） */
 interface TplMeta {
@@ -404,6 +446,16 @@ async function bootstrap() {
   smtpSecureBool.value = mailForm.smtp_secure === '1';
   smtpEnabled.value = !!data.smtpEnabled;
   smtpPassSet.value = data.settings.smtp_pass === '__KEEP__';
+  Object.assign(oauthForm, {
+    github_client_id: data.settings.github_client_id ?? '',
+    github_client_secret: data.settings.github_client_secret ?? '',
+    google_client_id: data.settings.google_client_id ?? '',
+    google_client_secret: data.settings.google_client_secret ?? '',
+  });
+  githubEnabled.value = !!data.githubEnabled;
+  googleEnabled.value = !!data.googleEnabled;
+  ghSecretSet.value = data.settings.github_client_secret === '__KEEP__';
+  ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
   settingsReady.value = true;
@@ -417,10 +469,14 @@ async function saveSettings(keys: string[]) {
   saving.value = true;
   try {
     const body: Record<string, unknown> = {};
-    for (const k of keys) body[k] = (siteForm as Record<string, unknown>)[k] ?? mailForm[k];
+    for (const k of keys) {
+      body[k] = (siteForm as Record<string, unknown>)[k] ?? mailForm[k] ?? (oauthForm as Record<string, unknown>)[k];
+    }
     body.smtp_secure = smtpSecureBool.value;
     const { data } = await adminHttp.put('/admin/settings', body);
     smtpEnabled.value = !!data.smtpEnabled;
+    githubEnabled.value = !!data.githubEnabled;
+    googleEnabled.value = !!data.googleEnabled;
     if (logoUrl.value && keys.includes('site_title')) await refreshSite();
     showFlash('✓ 已保存');
   } catch (e) {
@@ -433,6 +489,10 @@ async function saveSettings(keys: string[]) {
 async function saveMailSettings() {
   const keys = mailTemplates.value.flatMap((t) => [t.subjectKey, t.bodyKey]);
   await saveSettings([...keys, 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass']);
+}
+
+async function saveOauthSettings() {
+  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret']);
 }
 
 /* ---- 邮件模板编辑：占位符插入 / 恢复默认 ---- */
@@ -555,6 +615,7 @@ interface AdminUser {
   permissions: string[] | null;
   status: 'active' | 'disabled';
   github_id: number | null;
+  google_id: string | null;
   created_at: string;
 }
 

@@ -80,16 +80,19 @@ cd ../web && npm run dev
 | `site_description` | 站点描述（关于页/SEO 用） |
 | `register_open` | 关闭后 `/api/auth/register` 返回 403，登录页隐藏注册 tab |
 | `github_client_id` / `github_client_secret` | 填好即启用 GitHub 登录；留空/清空即关闭 |
+| `google_client_id` / `google_client_secret` | 填好即启用 Google 登录；留空/清空即关闭 |
 | `web_origin` | 第三方登录回调后跳回的前端地址（生产环境改成你的域名） |
 
 - 后台存的值优先于 `.env`；密钥字段读接口只返回掩码（`__KEEP__` 表示保持原值，`__CLEAR__` 表示清空）。
 - **关于页副标题**：后台「站点」页可自定义关于页标题下方的副标题（`about_subtitle`）；留空时使用内置默认「一个会发光的角落」。
 - **站点 Logo / 用户默认头像**：后台「站点」页上传（`POST/DELETE /api/admin/logo`、`POST/DELETE /api/admin/default-avatar`）。默认头像对所有无头像用户生效（文章卡/文章页/顶栏/控制台/空间页统一回退到 `GET /api/site` 的 `defaultAvatarUrl`）；未设置时使用内置 `web/src/assets/default-avatar.svg`。
-- **GitHub OAuth**：在 GitHub → Settings → Developer settings → OAuth Apps 新建应用，
-  Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`），把 Client ID / Secret 填进站点配置即可。
+- **第三方登录（后台「第三方登录」页）**：GitHub / Google 各填一对 Client ID / Secret 即启用（登录页自动出现对应按钮），清空即关闭。后台会直接展示当前环境的回调地址。
+  - GitHub：GitHub → Settings → Developer settings → OAuth Apps，Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`）。
+  - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
+  - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
 - **邮件（验证码 / 欢迎 / 测试）**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
 - **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
-- **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
+- **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub/Google 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
 - **发件人格式**：必须包含邮箱地址，推荐 `名称 <you@domain.com>`；只填名称会被自动包装成 `"名称" <SMTP 账号>`（否则 nodemailer 拿不到地址，信封 Return-Path 为空、无 From 头，外域邮箱会拒收或进垃圾桶，且退信也发不回来）。
 
 ## API 概览
@@ -97,13 +100,14 @@ cd ../web && npm run dev
 | 方法 & 路径 | 说明 |
 | --- | --- |
 | `GET /api/health` | 健康检查（含数据库连通性） |
-| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 是否可用/关于页副标题 aboutSubtitle） |
+| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 与 Google 是否可用/关于页副标题 aboutSubtitle） |
 | `POST /api/auth/register` | 邮箱 + 密码 + **邮箱验证码**注册（验证码校验通过即视为邮箱已验证） |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
 | `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送） |
 | `POST /api/auth/login/code` | 验证码登录（邮箱不存在则自动注册） |
 | `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
+| `GET /api/auth/google` · `/api/auth/google/callback` | Google OAuth（OIDC，未配置返回 501） |
 | `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` | 当前用户 / 改名 / 换头像 |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |
 | `GET /api/articles/:id` | 文章详情（草稿仅作者或管理员可见） |
@@ -128,9 +132,9 @@ cd ../web && npm run dev
 
 ```bash
 cd server
-node scripts/smoke-auth.mjs       # 17 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名
+node scripts/smoke-auth.mjs       # 19 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
-node scripts/smoke-admin.mjs      # 48 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/注册开关/邮件模板元数据
+node scripts/smoke-admin.mjs      # 58 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/第三方登录配置/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）
 cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 ```

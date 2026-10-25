@@ -8,6 +8,7 @@ export interface SiteInfo {
   description: string;
   registerOpen: boolean;
   githubEnabled: boolean;
+  googleEnabled: boolean;
   logoUrl: string;
   defaultAvatarUrl: string;
   aboutHtml: string;
@@ -22,6 +23,7 @@ export const useSiteStore = defineStore('site', {
       description: '微光博客 —— 一个会发光的个人博客角落。',
       registerOpen: true,
       githubEnabled: false,
+      googleEnabled: false,
       logoUrl: '',
       defaultAvatarUrl: '',
       aboutHtml: '',
