@@ -16,8 +16,11 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 /** OAuth state（GitHub / Google 共用，10 分钟有效，单实例内存即可） */
 const oauthStates = new Map();
 
-function oauthCallbackUri(req, provider) {
-  return `${req.protocol}://${req.get('host')}/api/auth/${provider}/callback`;
+async function oauthCallbackUri(provider) {
+  // 以站点配置 web_origin 为准，不依赖请求头：线上走 nginx 反代时 req.protocol 拿到的是 http，
+  // 会导致发向 GitHub/Google 的 redirect_uri 与控制台登记的 https 地址不一致而报错
+  const base = await webOrigin();
+  return `${base}/api/auth/${provider}/callback`;
 }
 
 /** 第三方登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱） */
@@ -238,7 +241,7 @@ authRouter.get('/github', async (req, res) => {
   oauthStates.set(state, Date.now() + 10 * 60 * 1000);
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', oauthCallbackUri(req, 'github'));
+  url.searchParams.set('redirect_uri', await oauthCallbackUri('github'));
   url.searchParams.set('scope', 'read:user user:email');
   url.searchParams.set('state', state);
   res.redirect(url.toString());
@@ -258,7 +261,7 @@ authRouter.get('/github/callback', async (req, res) => {
     const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: oauthCallbackUri(req, 'github') }),
+      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: await oauthCallbackUri('github') }),
     });
     const tokenData = await tokenRes.json();
     if (!tokenData.access_token) {
@@ -300,7 +303,7 @@ authRouter.get('/google', async (req, res) => {
   oauthStates.set(state, Date.now() + 10 * 60 * 1000);
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', g.clientId);
-  url.searchParams.set('redirect_uri', oauthCallbackUri(req, 'google'));
+  url.searchParams.set('redirect_uri', await oauthCallbackUri('google'));
   url.searchParams.set('response_type', 'code');
   url.searchParams.set('scope', 'openid email profile');
   url.searchParams.set('state', state);
@@ -324,7 +327,7 @@ authRouter.get('/google/callback', async (req, res) => {
         code,
         client_id: g.clientId,
         client_secret: g.clientSecret,
-        redirect_uri: oauthCallbackUri(req, 'google'),
+        redirect_uri: await oauthCallbackUri('google'),
         grant_type: 'authorization_code',
       }),
     });

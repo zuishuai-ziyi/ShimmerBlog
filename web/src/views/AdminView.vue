@@ -394,8 +394,8 @@ const githubEnabled = ref(false);
 const googleEnabled = ref(false);
 const ghSecretSet = ref(false);
 const ggSecretSet = ref(false);
-// 回调地址随访问后台的地址走（本地 5180 / 线上域名自动切换）
-const callbackBase = window.location.origin;
+// 回调地址以站点配置 web_origin 为准（与后端 redirect_uri 同源：本地 http://localhost:5180，线上域名）；装载配置前先展示当前访问地址
+const callbackBase = ref(window.location.origin);
 const ghAppUrl = 'https://github.com/settings/developers';
 const ggAppUrl = 'https://console.cloud.google.com/apis/credentials';
 
@@ -456,6 +456,7 @@ async function bootstrap() {
   googleEnabled.value = !!data.googleEnabled;
   ghSecretSet.value = data.settings.github_client_secret === '__KEEP__';
   ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
+  if (data.settings.web_origin) callbackBase.value = data.settings.web_origin;
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
   settingsReady.value = true;

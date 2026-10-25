@@ -475,3 +475,12 @@
 - 回归（本地后端 3010，Windows node）：smoke-admin **58/0**（新增 7 项：配置返回 enabled 字段、公开 /site 含 googleEnabled、google secret 掩码、id+secret 齐后 googleEnabled=true、/site 同步、/auth/google 302 → accounts.google.com、清理后回 false）；smoke-auth **19/0**（新增 google 501 与 callback bad state 400）；smoke-articles 24/0；e2e-mail-tpl 20/0；cleanup-test-users 无残留；`npm run build` 通过。
 - 事故记录：本地 3010 被上一轮会话遗留的旧 node 进程（PID 32096，今晨 0:19 启动）占用，Windows 下新进程 bind 成功但流量仍进旧进程（`/api/site` 一直缺 `googleEnabled`）——与第 46 轮远端「残留进程占 3010」教训同款；杀掉旧进程重启后恢复。本地验证一律先 `Get-Process node` 查旧进程。
 - 待办（需用户在控制台创建凭据，仓库侧已就绪）：GitHub OAuth App（callback `https://blog.xiaoziyi.com/api/auth/github/callback`）与 Google OAuth 客户端（redirect URI `.../api/auth/google/callback`），凭据直接填进后台「第三方登录」页即可上线。
+
+## 49. 修复线上第三方登录「redirect_uri is not associated with this application」
+
+- 现象：用户在 GitHub OAuth App 登记好回调地址并填入后台凭据后，GitHub 授权页报 `The redirect_uri is not associated with this application.`
+- 根因：`server/src/routes/auth.js` 的 `oauthCallbackUri(req, provider)` 用 `req.protocol` + `req.get('host')` 拼 `redirect_uri`。线上链路为 nginx(:81) → `proxy_pass http://127.0.0.1:3010`，Express 未开 `trust proxy`、nginx 未传 `X-Forwarded-Proto`，因此发向 GitHub 的是 `http://blog.xiaoziyi.com/...`，与控制台登记的 `https://...` 协议不一致（GitHub/Google 均要求逐字匹配）。
+- 修复：`redirect_uri` 改为从站点配置 `web_origin` 生成（`async oauthCallbackUri(provider)`，settings `web_origin` → env `WEB_ORIGIN` → 默认 `http://localhost:5180`），不再依赖请求头——线上恒为 `https://blog.xiaoziyi.com/api/auth/<provider>/callback`，本地恒为 `http://localhost:5180/...`（与 vite dev 同源，dev proxy 转发 `/api`）。4 处调用点（github 授权/换 token、google 授权/换 token）全部 `await`。
+- 后台「第三方登录」页的回调地址提示同步改为展示 `web_origin` 拼接结果（装载配置前回退 `window.location.origin`），保证「提示的地址 = 后端实际发送的地址 = 控制台该填的地址」。
+- 验证：本地临时配置 google 凭据 → `GET /api/auth/google` 302 Location 中 `redirect_uri=http://localhost:5180/api/auth/google/callback`（此前会拼成 `http://localhost:3010/...`，vite `changeOrigin` 改写 Host 所致）→ 清空还原 `googleEnabled=false`；smoke-auth **19/0**、smoke-admin **58/0**、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。线上部署后复核 `/api/auth/github` 302 Location 的 `redirect_uri=https://blog.xiaoziyi.com/api/auth/github/callback`。
+- 用户侧需保证：GitHub OAuth App 的 Authorization callback URL 与 Google「已获授权的重定向 URI」分别精确填写上述两个 `https://blog.xiaoziyi.com` 地址（协议、域名、路径、无尾斜杠）。
