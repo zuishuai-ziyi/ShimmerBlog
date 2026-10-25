@@ -451,4 +451,11 @@
   - `server/.env` 仍是 `-rw------- www www`（rsync 排除项生效，未被覆盖）；`server/uploads/{avatars,images}` 保留
 - 配置对账（部署后）：线上与本地 settings 仍 23 键一致，差异只有 `web_origin`（线上 `https://blog.xiaoziyi.com`）与 `mail_welcome_subject/body`（用户随后在线上后台自行填写，16:33Z）；`users`/`articles` 未同步。
 - 备注：Actions 提示 `actions/checkout@v4`、`actions/setup-node@v4` 的 Node 20 已弃用（被强制跑在 Node 24 上），不影响功能，后续可升到 v5。域名 `blog.xiaoziyi.com` 待用户在宝塔绑定（站点反代到 `127.0.0.1:3010`）。
+### 部署拓扑（实测确认）
+
+- 宝塔「Node 项目」生成的 nginx 站点：`/www/server/panel/vhost/nginx/node_ShimmerBlog.conf` → `listen 81` + `server_name blog.xiaoziyi.com` + `location / { proxy_pass http://127.0.0.1:3010; }`。
+- Node 进程监听 `*:3010`（`node src/index.js`，宝塔用 `v26.7.0` 的 npm 启动，脚本 `/www/server/nodejs/vhost/scripts/ShimmerBlog.sh`、pid `/www/server/nodejs/vhost/pids/ShimmerBlog.pid`、日志 `/www/wwwlogs/nodejs/ShimmerBlog.log`）。
+- 因此线上访问链路：**域名 → nginx :81 → 反代 127.0.0.1:3010（Express 同时给 API 与 `web/dist`）**。
+- 验证方式：`curl -H "Host: blog.xiaoziyi.com" http://192.140.166.198:81/` → 200 且返回 1105 B 的 SPA index（`<title>微光博客</title>`）、`/api/health` → `{"ok":true,"db":true}`、深链 `/about` → 200。不带 Host 头访问 IP:81 会落到 nginx 默认 server 而 404，属预期（`server_name` 只匹配域名）。
+- 待用户在宝塔/域名侧完成（不涉及仓库）：①DNS A 记录 `blog.xiaoziyi.com → 192.140.166.198`；②站点绑定域名 + 申请 SSL；③80/443 目前被 `SamWafLinux64` 占用，需在 SamWaf 里加站点反代到 `127.0.0.1:81`（或调整端口占用）；④防火墙放行 80/443（3010 不必对外，已被 nginx 反代）。
 
