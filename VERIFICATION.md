@@ -494,3 +494,35 @@
   - `web/src/views/AdminView.vue`「第三方登录」页新增「出站代理（可选）」卡片：HTTP(S) 代理地址输入框 + 说明（仅作用于服务器侧请求；访客浏览器仍需能自行打开授权页）。
 - 验证：本地配置 `oauth_proxy_url=http://127.0.0.1:7890` → GET /admin/settings 回读一致 → 清空回空；配代理状态下 `/auth/google` 授权跳转不受影响（302 由本地拼 URL，无出站请求）。回归 smoke-admin **61/0**（+3）、smoke-auth 19/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、build 通过。
 - 说明：代理只解决**服务器侧** API 访问。中国大陆访客浏览器访问 `accounts.google.com` 授权页仍需访客自备代理；GitHub 授权页国内一般可达。
+
+## 51. 线上接入 VLESS 出站代理（sing-box 客户端）+ 服务器迁 IP 处置
+
+- 背景：用户提供 sing-box VLESS 出站节点（vless + xtls-rprx-vision + reality，出口 77.93.157.132:35858），要求「使其支持下列代理」。应用侧 `oauth_proxy_url` 只认 HTTP(S) 代理（undici ProxyAgent），VLESS 需在服务器跑客户端转本地 HTTP 端口，应用无需改代码。
+- 排障中发现：线上已迁机换 IP——`blog.xiaoziyi.com` A 记录由 192.140.166.198 改为 **198.20.0.9**（同一台雨云机 RainYun-HUmBvpUG，宝塔路径不变）。换 IP 重启后 node 3010 未自启，站点 502 → 已用 `bash /www/server/nodejs/vhost/scripts/ShimmerBlog.sh` 拉起并恢复。
+- 服务器连通性实测：api.github.com 直连 200；oauth2.googleapis.com / accounts.google.com 直连 000（被墙）→ Google 登录必须走代理。
+- 部署（root@198.20.0.9）：sing-box v1.14.4 linux-amd64（GitHub release 直连下载持续超时，改 Windows 本地下载后 scp）→ `/usr/local/bin/sing-box`；配置 `/etc/sing-box/client.json`（600，VLESS Reality 出站 + `mixed` inbound 127.0.0.1:2080，同端口 HTTP+SOCKS）；systemd `sing-box-client.service`（`sing-box check` 通过，`enable --now`，开机自启）。
+- 代理链路验证：`curl -x http://127.0.0.1:2080` → api.github.com/zen 200、oauth2.googleapis.com/token 400（穿透）、accounts.google.com 302、api.github.com/user 401 JSON。
+- 应用级 A/B 验证（admin 密码已非默认值，改走 MySQL 直写 settings + 重启 node）：
+  - `oauth_proxy_url=http://127.0.0.1:2099`（错误端口）→ 假 code 打 `/api/auth/github/callback`（真 state）→ `{"error":"GitHub OAuth 处理失败","detail":"TypeError: fetch failed"}` → 证明应用确实走 `oauth_proxy_url`；
+  - 改回 `http://127.0.0.1:2080` 重启 → 同样请求 → GitHub 真实响应 `bad_verification_code` → token 交换请求穿透 `node → ProxyAgent → sing-box:2080 → VLESS/Reality → 77 出口 → GitHub`。
+- 线上配置落库：settings `oauth_proxy_url = http://127.0.0.1:2080`（GitHub/Google 出站统一走代理；授权 302 仍由访客浏览器完成）。
+- 文档：README「第三方登录」节补 VLESS/Reality 用法（sing-box mixed 转本地端口）。代码零改动，无回归需求。
+
+## 52. 登录页第三方区文案统一为「继续」
+
+- 用户要求：登录 UI 文本改为「使用 xxx 继续」，提示文本改为「或使用以下方式继续」。
+- `web/src/views/LoginView.vue`：分隔条 `或使用以下方式{{ mode === 'register' ? '注册' : '登录' }}` → 固定「或使用以下方式继续」；GitHub 按钮 `使用 GitHub {{...}}` → 固定「使用 GitHub 继续」；Google 按钮同理「使用 Google 继续」（不再随 tab 变化）。
+- `npm run build` 通过。纯文案改动，无逻辑变化。
+
+## 53. 删除关于页底部版权小字
+
+- 用户要求：删除关于页面下方的小字「© 2026 微光博客 · ShimmerBlog」。
+- `web/src/views/AboutView.vue`：删掉模板中 `<footer class="foot muted">© {{ year }} {{ site.info.title }} · ShimmerBlog</footer>`，连带清理不再使用的 `const year` 与 `.foot` 样式块（页脚版权仍由全局 `SiteFooter.vue` 提供，不受影响）。
+- `npm run build` 通过。纯展示改动。
+
+## 54. 主页文章卡作者名未应用自定义颜色
+
+- 用户报告：主页的用户名自定义颜色似乎未生效。
+- 根因：作者名自定义颜色在文章页（`ArticleView.vue`）、顶栏（`TopBar.vue`）、空间页（`SpaceView.vue`）、后台均已应用，但主页时间线用的 `ArticleCard.vue` 模板只渲染 `{{ article.author_name }}`，没绑定 `author_name_color`——列表接口（`server/src/routes/articles.js` 列表 SELECT）其实一直返回该字段，纯属前端漏绑。
+- 修复：`web/src/components/ArticleCard.vue` 作者名 span 加 `:style="article.author_name_color ? { color: article.author_name_color } : undefined"`（与文章页同款写法）。`ArticleBrief` 类型本就含该字段，无类型/后端改动。
+- 影响：主页时间线与归档页（`TimelineList.vue` 复用 ArticleCard）同步生效。`npm run build` 通过；本地 `/api/articles` 实测列表项含 `author_name_color` 字段。

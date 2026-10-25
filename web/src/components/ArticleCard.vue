@@ -6,7 +6,7 @@
     <p v-else class="summary placeholder">（暂无简介）</p>
     <footer class="meta">
       <img class="avatar" :src="article.author_avatar || fallbackAvatar" alt="" />
-      <span class="author">{{ article.author_name }}</span>
+      <span class="author" :style="article.author_name_color ? { color: article.author_name_color } : undefined">{{ article.author_name }}</span>
       <span class="dot">·</span>
       <time>{{ formatDate(article.published_at || article.created_at) }}</time>
       <span class="read">阅读 →</span>

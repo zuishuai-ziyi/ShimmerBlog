@@ -92,6 +92,7 @@ cd ../web && npm run dev
   - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
   - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
   - **国内服务器**：直连不了 GitHub/Google API 时，在后台「第三方登录」页填「出站代理」（或环境变量 `OAUTH_PROXY_URL`），令牌换取与用户信息请求自动走代理；访客浏览器仍需能自行打开 GitHub / Google 授权页。
+  - **VLESS/Reality 节点**：代理字段只认 HTTP(S)/CONNECT 代理，不能直接填 `vless://` 链接——需在应用所在服务器跑一个 sing-box/xray 客户端把节点转成本地 HTTP 端口（sing-box inbound 用 `mixed`，同端口兼 HTTP+SOCKS），再填 `http://127.0.0.1:端口`。线上 198 机的部署：`/etc/sing-box/client.json`（VLESS 出站 + mixed 127.0.0.1:2080）+ `systemctl enable --now sing-box-client`，后台已填 `http://127.0.0.1:2080`。
 - **邮件（验证码 / 欢迎 / 测试）**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
 - **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
 - **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub/Google 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。

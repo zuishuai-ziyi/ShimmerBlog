@@ -48,7 +48,6 @@
       </section>
     </template>
 
-    <footer class="foot muted">© {{ year }} {{ site.info.title }} · ShimmerBlog</footer>
   </div>
 </template>
 
@@ -57,7 +56,6 @@ import { computed, onMounted } from 'vue';
 import { useSiteStore } from '../stores/site';
 
 const site = useSiteStore();
-const year = new Date().getFullYear();
 const palette = ['#03045e', '#023e8a', '#0077b6', '#0096c7', '#00b4d8', '#48cae4', '#90e0ef', '#ade8f4', '#caf0f8'];
 
 // 管理员在后台以 HTML 编辑关于页；此处渲染前做最小净化（仅保留文本与链接/标题/列表等安全标签）
@@ -201,11 +199,5 @@ onMounted(() => {
   height: 30px;
   border-radius: 8px;
   box-shadow: 0 0 0 1px rgba(255, 255, 255, 0.06) inset;
-}
-
-.foot {
-  text-align: center;
-  padding: 20px 0 10px;
-  font-size: 12.5px;
 }
 </style>
