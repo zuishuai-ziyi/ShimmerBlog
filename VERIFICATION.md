@@ -438,3 +438,17 @@
 - 做法（全程不把密钥打进对话/日志）：本地用 `mysql2` + `dotenv` 导出 `settings`（排除 `admin_password_hash`）为 JSON（`mode 0o600`）→ `scp` 到服务器 `/tmp` → 服务器上跑导入脚本逐项 `INSERT ... ON DUPLICATE KEY UPDATE value = VALUES(value)` → 单独把 `web_origin` 纠正为 `https://blog.xiaoziyi.com`（本地是 `http://localhost:5180`）→ 删除服务器与本地的临时文件。
 - 校验：两边各导出 23 个键的 `md5` 指纹做 `diff`，**仅 `web_origin` 不同**（预期），`smtp_pass`/`github_client_secret` 指纹一致（说明未截断、未变形）；导入后 `settings` 24 行、`users` 0、`articles` 0。线上试启动 `GET /api/site` 返回与本地一致的站点信息（`微光博客` / `追光的人，终会光芒万丈` / `一个会发光的角落`），`/api/health` → `{"ok":true,"db":true}`，验证后 `fuser -k 3010/tcp` 停服。
 - 备注：线上 `admin_password_hash` 保留服务器自己种子写入的值（两边都是 `123456`，不覆盖）；改动均为服务器侧数据，不涉及仓库文件。
+
+## 47. 首次 GitHub Actions 自动部署跑通
+
+- 用户在宝塔建好 Node 项目（名称 `ShimmerBlog`、启动文件 `index.js`、端口 3010）后，推送 `ccd37d2`（feat: GitHub Actions 自动部署 + Node 单端口托管前端）触发首次部署：run `40149174339`，**50 秒内全部步骤成功**（检出 → 构建前端 → SSH → rsync 后端 → rsync 前端产物 → `npm ci --omit=dev` + 停旧进程 + 宝塔启动脚本 → 健康检查）。
+- 线上验证（`192.140.166.198:3010`）：
+  - `GET /api/health` → `{"ok":true,"db":true}`
+  - `GET /` → 200 `text/html`，`<title>微光博客</title>`，1105 B
+  - `GET /about`（深链）→ 200 且返回 `#app` 容器（SPA 回退生效）
+  - `GET /assets/index-*.js` → 200，`cache-control: public, max-age=31536000, immutable`
+  - `GET /api/nope` → 404（不会把 API 404 变成 index.html）
+  - `server/.env` 仍是 `-rw------- www www`（rsync 排除项生效，未被覆盖）；`server/uploads/{avatars,images}` 保留
+- 配置对账（部署后）：线上与本地 settings 仍 23 键一致，差异只有 `web_origin`（线上 `https://blog.xiaoziyi.com`）与 `mail_welcome_subject/body`（用户随后在线上后台自行填写，16:33Z）；`users`/`articles` 未同步。
+- 备注：Actions 提示 `actions/checkout@v4`、`actions/setup-node@v4` 的 Node 20 已弃用（被强制跑在 Node 24 上），不影响功能，后续可升到 v5。域名 `blog.xiaoziyi.com` 待用户在宝塔绑定（站点反代到 `127.0.0.1:3010`）。
+
