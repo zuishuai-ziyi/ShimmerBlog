@@ -20,7 +20,7 @@ ShimmerBlog/
 ├── server/                 # Express API（默认 3010）
 │   ├── src/
 │   │   ├── index.js        # 启动 + 未捕获异常落盘 crash.log
-│   │   ├── app.js          # 路由挂载 / 静态 / 统一错误处理
+│   │   ├── app.js          # 路由挂载 / 上传静态 / 前端 SPA 托管 / 统一错误处理
 │   │   ├── config.js       # .env 读取
 │   │   ├── db.js           # 连接池 + initDatabase()（建库建表 + 管理密码种子）
 │   │   ├── uploads.js      # multer（头像 / 文章配图）
@@ -36,6 +36,7 @@ ShimmerBlog/
 │       ├── stores/         # auth（登录态）· site（站点配置）
 │       ├── styles/tokens.css  # 9 色板 + 玻璃变量
 │       └── api/http.ts     # axios 实例（自动带 Bearer）
+├── .github/workflows/      # deploy.yml：推 main 自动构建部署
 ├── style.txt               # 配色来源
 └── logo.png
 ```
@@ -136,8 +137,37 @@ cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 
 冒烟脚本会创建 `@shimmer.dev` / `@test.local` 测试账号与少量文章，跑完请自行清理（或用管理员在控制台删除）。
 
+## 部署（GitHub Actions 自动部署）
+
+推送到 `main` 即在 Actions 里构建并部署到 `192` 的 `/www/wwwroot/ShimmerBlog`（宝塔面板服务器），也可在 Actions 页面手动触发（`.github/workflows/deploy.yml`）。
+
+一次部署做四件事（部署后服务器上的 `web/dist` 由 Node 直接托管，单端口 3010 同时提供 API 与前端）：`web` 上 `npm ci && npm run build` → `rsync` 后端源码与 `web/dist` 到服务器（`.env`、`node_modules`、`server/uploads`、日志既不覆盖也不删除）→ 服务器 `npm ci --omit=dev` 并重启宝塔 Node 项目 → `curl /api/health` 健康检查（失败即红并打印最近日志）。
+
+### 1. 仓库 Secrets
+
+| Secret | 内容 |
+| --- | --- |
+| `SSH_HOST` | 服务器地址 |
+| `SSH_PORT` | SSH 端口 |
+| `SSH_USER` | 部署用户（需可写 `/www/wwwroot` 并能重启服务） |
+| `SSH_PRIVATE_KEY` | 该用户 SSH 私钥全文 |
+
+本地已登录 `gh` 时可直接写入：`gh secret set SSH_PRIVATE_KEY --repo <owner>/<repo> < ~/.ssh/<私钥>`。私钥只放 Secrets，绝不入库。
+
+### 2. 服务器一次性准备（宝塔）
+
+1. **数据库**：MySQL 建库 `shimmerblog`（`utf8mb4`），建一个仅授权该库的账号。
+2. **`server/.env`**（放服务器上，不入库）：`PORT=3010`、`JWT_SECRET` 用随机长串、`DB_*` 指向上面的库、`ADMIN_PASSWORD` 首次启动写入管理员哈希、SMTP 与生产域名按实际填。
+3. **宝塔「网站 → Node 项目 → 添加」**：项目名 `ShimmerBlog`（须与 workflow 里 `NODE_PROJECT` 一致）、项目目录 `/www/wwwroot/ShimmerBlog/server`、启动命令 `npm run start`、端口 `3010`。宝塔会生成重启脚本 `/www/server/nodejs/vhost/scripts/ShimmerBlog.sh` 与 pid 文件，workflow 依赖它们重启；找不到脚本时退化为 `nohup npm run start`。
+4. **站点**：宝塔「Node 项目」会自动生成一条 `proxy_pass http://127.0.0.1:3010` 的整站反代站点——直接给它绑定域名、申请 SSL 即可。**不需要**另建静态站点，也**不需要** Nginx 做 `/api`、`/uploads` 的部分路径反代：前端构建产物由 Node 自己托管（`server/src/app.js` 用 `express.static` 提供 `web/dist` 并做 SPA history 回退，路径默认 `../web/dist`，可用环境变量 `WEB_DIST` 覆盖；`/assets` 带 hash 长缓存，入口 HTML 不缓存）。
+5. 首次部署前建好目录：`mkdir -p /www/wwwroot/ShimmerBlog/server /www/wwwroot/ShimmerBlog/web/dist`，属主 `www:www`。
+
+### 3. 部署后自检
+
+`curl https://<域名>/api/health` 返回 `{"ok":true,"db":true}`；后台「站点配置 → 前端地址（`web_origin`）」填生产域名。
+
 ## 开发注意
 
 - 前端 dev server 绑定 `127.0.0.1:5180`（不是 `localhost`，避免 IPv6/IPv4 解析差异），并通过 Vite 代理把 `/api`、`/uploads` 转发到 `127.0.0.1:3010`。
-- 生产部署：`npm run build` 产物在 `web/dist`，用 Nginx 托管静态文件并把 `/api`、`/uploads` 反代到 Node 服务；`web_origin` 改生产域名。
+- 生产部署见上方「部署」一节（GitHub Actions 自动 rsync + 重启宝塔 Node 项目）。手工部署等价于：`cd web && npm run build` → `rsync` 到服务器 → `server` 目录 `npm ci --omit=dev` → 重启 Node。**前端由 Node 托管**（`web/dist` 存在即自动生效，开发时没有 dist 也不影响），因此生产只暴露一个 3010 端口；`web_origin` 改生产域名。
 - 上传文件在 `server/uploads/`（头像 `avatars/`、配图 `images/`），已加入 `.gitignore`，备份时别漏。

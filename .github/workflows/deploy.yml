@@ -1,0 +1,139 @@
+name: Deploy
+
+# 推送到 main 自动部署，也可在 Actions 页面手动触发
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: deploy-production
+  cancel-in-progress: false
+
+env:
+  # 服务器上的项目根目录（宝塔站点目录）
+  DEPLOY_PATH: /www/wwwroot/ShimmerBlog
+  # 宝塔「Node 项目」名称：决定重启脚本与 pid 文件路径
+  NODE_PROJECT: ShimmerBlog
+  APP_PORT: '3010'
+
+jobs:
+  deploy:
+    name: Build & Deploy
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 准备 Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: |
+            web/package-lock.json
+            server/package-lock.json
+
+      - name: 构建前端
+        working-directory: web
+        run: |
+          npm ci --no-audit --no-fund
+          npm run build
+
+      - name: 准备 SSH
+        env:
+          SSH_HOST: ${{ secrets.SSH_HOST }}
+          SSH_PORT: ${{ secrets.SSH_PORT }}
+          SSH_USER: ${{ secrets.SSH_USER }}
+          SSH_PRIVATE_KEY: ${{ secrets.SSH_PRIVATE_KEY }}
+        run: |
+          mkdir -p ~/.ssh
+          chmod 700 ~/.ssh
+          printf '%s\n' "$SSH_PRIVATE_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -p "${SSH_PORT:-22}" -H "$SSH_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          {
+            echo 'Host deploy-target'
+            echo "  HostName $SSH_HOST"
+            echo "  Port ${SSH_PORT:-22}"
+            echo "  User $SSH_USER"
+            echo '  IdentityFile ~/.ssh/deploy_key'
+            echo '  IdentitiesOnly yes'
+            echo '  StrictHostKeyChecking yes'
+          } > ~/.ssh/config
+          chmod 600 ~/.ssh/config
+          ssh deploy-target 'echo "SSH 连接正常: $(hostname)"'
+
+      - name: 推送后端源码
+        run: |
+          # --delete 让服务器与仓库保持一致；.env / 依赖 / 上传文件 / 日志不被覆盖或删除
+          rsync -az --delete \
+            --exclude '.env' \
+            --exclude 'node_modules/' \
+            --exclude 'uploads/*' \
+            --exclude '*.log' \
+            -e ssh server/ "deploy-target:${{ env.DEPLOY_PATH }}/server/"
+
+      - name: 推送前端产物
+        run: |
+          rsync -az --delete -e ssh web/dist/ "deploy-target:${{ env.DEPLOY_PATH }}/web/dist/"
+
+      - name: 安装依赖并重启服务
+        run: |
+          ssh deploy-target 'bash -s' <<'REMOTE'
+          set -euo pipefail
+          APP="${{ env.DEPLOY_PATH }}"
+          PROJECT="${{ env.NODE_PROJECT }}"
+          PORT="${{ env.APP_PORT }}"
+          PID_FILE="/www/server/nodejs/vhost/pids/${PROJECT}.pid"
+          START_SCRIPT="/www/server/nodejs/vhost/scripts/${PROJECT}.sh"
+          LOG_FILE="/www/wwwlogs/nodejs/${PROJECT}.log"
+
+          mkdir -p "$APP/server/uploads" "$APP/web/dist" /www/wwwlogs/nodejs
+
+          echo "==> 安装后端依赖（仅生产依赖）"
+          cd "$APP/server"
+          npm ci --omit=dev --no-audit --no-fund
+
+          echo "==> 修正属主"
+          chown -R www:www "$APP"
+
+          echo "==> 停止旧进程"
+          if [ -f "$PID_FILE" ]; then
+            kill "$(cat "$PID_FILE")" 2>/dev/null || true
+          fi
+          # 兜底：按端口清理残留进程，避免 3010 被旧实例占用
+          (command -v fuser >/dev/null && fuser -k "${PORT}/tcp" 2>/dev/null) || true
+          sleep 2
+
+          echo "==> 启动服务"
+          if [ -f "$START_SCRIPT" ]; then
+            bash "$START_SCRIPT"
+          else
+            echo "未找到宝塔启动脚本 $START_SCRIPT，使用兜底方式启动（待宝塔创建 Node 项目后自动接管）"
+            nohup npm run start >> "$LOG_FILE" 2>&1 &
+            echo $! > "$PID_FILE"
+          fi
+          sleep 2
+          echo "==> 重启完成"
+          REMOTE
+
+      - name: 健康检查
+        run: |
+          ssh deploy-target 'bash -s' <<'REMOTE'
+          set -uo pipefail
+          PORT="${{ env.APP_PORT }}"
+          for i in $(seq 1 30); do
+            if curl -fsS "http://127.0.0.1:${PORT}/api/health"; then
+              echo
+              echo "==> 健康检查通过"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "==> 健康检查失败，最近日志："
+          tail -n 40 "/www/wwwlogs/nodejs/${{ env.NODE_PROJECT }}.log" 2>/dev/null || true
+          exit 1
+          REMOTE
