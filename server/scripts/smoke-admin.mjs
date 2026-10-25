@@ -169,6 +169,16 @@ async function main() {
   const gCleared = await req('GET', '/admin/settings', { token: adminToken });
   check('清理后 googleEnabled=false', gCleared.data?.googleEnabled === false, String(gCleared.data?.googleEnabled));
 
+  // 出站代理（oauth_proxy_url）：保存回读 / 清空 / 未配置时 /auth/google 不受影响
+  await req('PUT', '/admin/settings', { token: adminToken, body: { oauth_proxy_url: 'http://127.0.0.1:7890' } });
+  const pSet = await req('GET', '/admin/settings', { token: adminToken });
+  check('oauth_proxy_url 保存并回读', pSet.data?.settings?.oauth_proxy_url === 'http://127.0.0.1:7890', String(pSet.data?.settings?.oauth_proxy_url));
+  const pAuth = await fetch(`${BASE}/auth/google`, { redirect: 'manual' });
+  check('配代理后授权跳转不受影响', pAuth.status === 501 || pAuth.status === 302, String(pAuth.status));
+  await req('PUT', '/admin/settings', { token: adminToken, body: { oauth_proxy_url: '' } });
+  const pCleared = await req('GET', '/admin/settings', { token: adminToken });
+  check('oauth_proxy_url 清空', pCleared.data?.settings?.oauth_proxy_url === '', String(pCleared.data?.settings?.oauth_proxy_url));
+
   const newTitle = `微光博客·${rnd()}`;
   const put = await req('PUT', '/admin/settings', { token: adminToken, body: { site_title: newTitle, github_client_secret: '__KEEP__' } });
   check('保存配置 200', put.status === 200, JSON.stringify(put.data));

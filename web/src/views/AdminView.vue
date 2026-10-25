@@ -184,6 +184,12 @@
               <label class="row"><span>Client Secret</span><input v-model="oauthForm.google_client_secret" type="password" :placeholder="ggSecretSet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
             </div>
 
+            <div class="card">
+              <h2>出站代理（可选）</h2>
+              <p class="hint">服务器直连不了 GitHub / Google API（如国内服务器）时填写 HTTP(S) 代理，例如 <code>http://127.0.0.1:7890</code>；留空直连。仅作用于服务器侧的令牌换取与用户信息请求；访客浏览器仍需能自行打开 GitHub / Google 授权页。</p>
+              <label class="row"><span>代理地址</span><input v-model.trim="oauthForm.oauth_proxy_url" placeholder="http://127.0.0.1:7890" autocomplete="off" /></label>
+            </div>
+
             <div class="ops">
               <button class="primary" :disabled="saving" @click="saveOauthSettings">
                 {{ saving ? '保存中…' : '保存第三方登录设置' }}
@@ -389,7 +395,7 @@ function showFlash(msg: string) {
 }
 
 const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '' });
-const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '' });
+const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '' });
 const githubEnabled = ref(false);
 const googleEnabled = ref(false);
 const ghSecretSet = ref(false);
@@ -451,6 +457,7 @@ async function bootstrap() {
     github_client_secret: data.settings.github_client_secret ?? '',
     google_client_id: data.settings.google_client_id ?? '',
     google_client_secret: data.settings.google_client_secret ?? '',
+    oauth_proxy_url: data.settings.oauth_proxy_url ?? '',
   });
   githubEnabled.value = !!data.githubEnabled;
   googleEnabled.value = !!data.googleEnabled;
@@ -493,7 +500,7 @@ async function saveMailSettings() {
 }
 
 async function saveOauthSettings() {
-  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret']);
+  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url']);
 }
 
 /* ---- 邮件模板编辑：占位符插入 / 恢复默认 ---- */

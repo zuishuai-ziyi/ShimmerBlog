@@ -32,6 +32,7 @@ const DEFAULTS = {
   github_client_secret: '',
   google_client_id: '',
   google_client_secret: '',
+  oauth_proxy_url: '',
   web_origin: 'http://localhost:5180',
   register_open: '1',
 };
@@ -89,6 +90,11 @@ export async function googleConfig() {
 
 export async function webOrigin() {
   return (await getSetting('web_origin')) || process.env.WEB_ORIGIN || 'http://localhost:5180';
+}
+
+/** OAuth 出站代理：后台配置优先，其次环境变量；空 = 直连（国内服务器访问 GitHub/Google API 时填写） */
+export async function oauthProxy() {
+  return (await getSetting('oauth_proxy_url')) || process.env.OAUTH_PROXY_URL || '';
 }
 
 /** SMTP 生效配置：后台设置优先，其次环境变量；均未配置返回 null */

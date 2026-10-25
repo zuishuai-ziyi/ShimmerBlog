@@ -1,11 +1,12 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
+import { ProxyAgent } from 'undici';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
 import { sendCodeEmail, sendWelcomeEmail } from '../services/mailer.js';
-import { githubConfig, googleConfig, webOrigin, getSetting } from '../services/settings.js';
+import { githubConfig, googleConfig, oauthProxy, webOrigin, getSetting } from '../services/settings.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
 
@@ -21,6 +22,22 @@ async function oauthCallbackUri(provider) {
   // 会导致发向 GitHub/Google 的 redirect_uri 与控制台登记的 https 地址不一致而报错
   const base = await webOrigin();
   return `${base}/api/auth/${provider}/callback`;
+}
+
+// OAuth 出站请求统一走这里：配置了 oauth_proxy_url（或 OAUTH_PROXY_URL）时经 HTTP(S) 代理，
+// 供国内服务器访问 GitHub/Google API。ProxyAgent 按 URL 缓存，后台改配置后自动重建。
+let _proxyAgent = null;
+let _proxyAgentUrl = '';
+async function oauthFetch(url, opts = {}) {
+  const proxy = await oauthProxy();
+  if (proxy) {
+    if (proxy !== _proxyAgentUrl) {
+      _proxyAgent = new ProxyAgent(proxy);
+      _proxyAgentUrl = proxy;
+    }
+    opts.dispatcher = _proxyAgent;
+  }
+  return fetch(url, opts);
 }
 
 /** 第三方登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱） */
@@ -258,7 +275,7 @@ authRouter.get('/github/callback', async (req, res) => {
   const { clientId, clientSecret } = gh;
   if (!clientId || !clientSecret) return res.status(501).json({ error: 'GitHub OAuth 未配置' });
   try {
-    const tokenRes = await fetch('https://github.com/login/oauth/access_token', {
+    const tokenRes = await oauthFetch('https://github.com/login/oauth/access_token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
       body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: await oauthCallbackUri('github') }),
@@ -272,8 +289,8 @@ authRouter.get('/github/callback', async (req, res) => {
       Accept: 'application/vnd.github+json',
       'User-Agent': 'shimmerblog',
     };
-    const ghUser = await (await fetch('https://api.github.com/user', { headers })).json();
-    const ghEmailsRes = await fetch('https://api.github.com/user/emails', { headers });
+    const ghUser = await (await oauthFetch('https://api.github.com/user', { headers })).json();
+    const ghEmailsRes = await oauthFetch('https://api.github.com/user/emails', { headers });
     const ghEmails = ghEmailsRes.ok ? await ghEmailsRes.json() : [];
     const email = ghEmails.find((e) => e.primary && e.verified)?.email || ghUser.email || null;
 
@@ -320,7 +337,7 @@ authRouter.get('/google/callback', async (req, res) => {
   const g = await googleConfig();
   if (!g.clientId || !g.clientSecret) return res.status(501).json({ error: 'Google 登录未配置' });
   try {
-    const tokenRes = await fetch('https://oauth2.googleapis.com/token', {
+    const tokenRes = await oauthFetch('https://oauth2.googleapis.com/token', {
       method: 'POST',
       headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({
@@ -335,7 +352,7 @@ authRouter.get('/google/callback', async (req, res) => {
     if (!tokenData.access_token) {
       return res.status(400).json({ error: 'Google 授权失败', detail: tokenData });
     }
-    const uiRes = await fetch('https://openidconnect.googleapis.com/v1/userinfo', {
+    const uiRes = await oauthFetch('https://openidconnect.googleapis.com/v1/userinfo', {
       headers: { Authorization: `Bearer ${tokenData.access_token}` },
     });
     if (!uiRes.ok) {

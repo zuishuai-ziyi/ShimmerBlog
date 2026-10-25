@@ -484,3 +484,13 @@
 - 后台「第三方登录」页的回调地址提示同步改为展示 `web_origin` 拼接结果（装载配置前回退 `window.location.origin`），保证「提示的地址 = 后端实际发送的地址 = 控制台该填的地址」。
 - 验证：本地临时配置 google 凭据 → `GET /api/auth/google` 302 Location 中 `redirect_uri=http://localhost:5180/api/auth/google/callback`（此前会拼成 `http://localhost:3010/...`，vite `changeOrigin` 改写 Host 所致）→ 清空还原 `googleEnabled=false`；smoke-auth **19/0**、smoke-admin **58/0**、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。线上部署后复核 `/api/auth/github` 302 Location 的 `redirect_uri=https://blog.xiaoziyi.com/api/auth/github/callback`。
 - 用户侧需保证：GitHub OAuth App 的 Authorization callback URL 与 Google「已获授权的重定向 URI」分别精确填写上述两个 `https://blog.xiaoziyi.com` 地址（协议、域名、路径、无尾斜杠）。
+
+## 50. OAuth 出站代理（国内服务器可用 GitHub / Google 登录）
+
+- 背景：用户要求「添加代理访问功能，使得国内服务器可以使用 Github 和 Google Auth」。国内服务器直连 `github.com` / `oauth2.googleapis.com` / `openidconnect.googleapis.com` 会被阻断，令牌换取与用户信息请求必然超时失败。
+- 实现：
+  - `server/package.json` 新增依赖 `undici`；`server/src/services/settings.js` `DEFAULTS` 新增 `oauth_proxy_url`（后台可配），新增 `oauthProxy()`（后台 → env `OAUTH_PROXY_URL` → 空 = 直连）。
+  - `server/src/routes/auth.js` 新增 `oauthFetch(url, opts)`：配置了代理时给 fetch 附加 `dispatcher: ProxyAgent(proxy)`（按 URL 模块级缓存，后台改配置自动重建）；GitHub 换 token / `/user` / `/user/emails` 与 Google 换 token / userinfo 共 5 处出站请求全部改走 `oauthFetch`。授权 302 跳转由访客浏览器完成，不经代理。
+  - `web/src/views/AdminView.vue`「第三方登录」页新增「出站代理（可选）」卡片：HTTP(S) 代理地址输入框 + 说明（仅作用于服务器侧请求；访客浏览器仍需能自行打开授权页）。
+- 验证：本地配置 `oauth_proxy_url=http://127.0.0.1:7890` → GET /admin/settings 回读一致 → 清空回空；配代理状态下 `/auth/google` 授权跳转不受影响（302 由本地拼 URL，无出站请求）。回归 smoke-admin **61/0**（+3）、smoke-auth 19/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、build 通过。
+- 说明：代理只解决**服务器侧** API 访问。中国大陆访客浏览器访问 `accounts.google.com` 授权页仍需访客自备代理；GitHub 授权页国内一般可达。
