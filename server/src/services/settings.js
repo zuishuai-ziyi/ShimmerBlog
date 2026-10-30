@@ -43,6 +43,9 @@ const DEFAULTS = {
   captcha_api: '',
   captcha_verify_api: '',
   captcha_id: 'click-default-ch',
+  // 第三方头像转存：重定向跟随上限（0–12 跳）与总超时（1–300 秒），后台可改
+  avatar_redirect_hops: '12',
+  avatar_timeout_seconds: '60',
 };
 
 export function invalidateSettings() {
@@ -113,6 +116,18 @@ export async function captchaApi() {
 /** OAuth 出站代理：后台配置优先，其次环境变量；空 = 直连（国内服务器访问 GitHub/Google API 时填写） */
 export async function oauthProxy() {
   return (await getSetting('oauth_proxy_url')) || process.env.OAUTH_PROXY_URL || '';
+}
+
+/** 第三方头像下载：重定向跟随上限（钳制 0–12，默认 12） */
+export async function avatarRedirectHops() {
+  const n = parseInt(await getSetting('avatar_redirect_hops'), 10);
+  return Number.isFinite(n) ? Math.min(12, Math.max(0, n)) : 12;
+}
+
+/** 第三方头像下载：总超时秒数（钳制 1–300，默认 60） */
+export async function avatarTimeoutSeconds() {
+  const n = parseInt(await getSetting('avatar_timeout_seconds'), 10);
+  return Number.isFinite(n) ? Math.min(300, Math.max(1, n)) : 60;
 }
 
 /** SMTP 生效配置：后台设置优先，其次环境变量；均未配置返回 null */

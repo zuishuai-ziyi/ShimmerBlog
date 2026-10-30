@@ -235,6 +235,17 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
       if (c && !NAME_COLOR_RE.test(c)) return res.status(400).json({ error: '颜色格式不正确' });
       body.default_name_color = c ? (c.startsWith('#') ? c : `#${c}`) : '';
     }
+    // 第三方头像下载限制：整数 + 范围鍳制（跳数 0–12，超时 1–300 秒）
+    for (const [key, min, max] of [
+      ['avatar_redirect_hops', 0, 12],
+      ['avatar_timeout_seconds', 1, 300],
+    ]) {
+      if (body[key] !== undefined) {
+        const n = parseInt(body[key], 10);
+        if (!Number.isFinite(n)) return res.status(400).json({ error: '头像下载参数必须为整数' });
+        body[key] = String(Math.min(max, Math.max(min, n)));
+      }
+    }
     const r = await setSettings(body);
     const gh = await githubConfig();
     const gg = await googleConfig();

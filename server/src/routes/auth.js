@@ -14,7 +14,7 @@ import {
 } from '../services/captcha.js';
 import { githubConfig, googleConfig, webOrigin, getSetting } from '../services/settings.js';
 import { oauthFetch } from '../services/oauth-fetch.js';
-import { saveAvatarFromUrl } from '../services/avatar.js';
+import { saveAvatarFromUrl, isAllowedAvatarHost } from '../services/avatar.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
 
@@ -34,7 +34,16 @@ async function oauthCallbackUri(provider) {
 
 // oauthFetch 已抽至 services/oauth-fetch.js（OAuth API 与头像下载共用，支持出站代理）
 
-/** 第三方登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱） */
+/**
+ * OAuth 登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱）。
+ * 头像：新建/并档后后台异步转存（不阻塞注册/登录主流程，失败仅日志不报错）；
+ * 每次登录都会刷新 remote_avatar_url（第三方可能更新了头像地址，供之后手动同步用）。
+ */
+async function localizeAvatar(userId, remoteUrl) {
+  const local = await saveAvatarFromUrl(remoteUrl);
+  await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [local, userId]);
+}
+
 async function findOrCreateOAuthUser(providerCol, providerId, { email, name, avatar }) {
   const [byPid] = await pool.query(`SELECT * FROM users WHERE \`${providerCol}\` = ? LIMIT 1`, [providerId]);
   let user = byPid[0];
@@ -43,28 +52,37 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
     const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
     user = byEmail[0];
     if (user) {
-      // 并档也记录第三方头像原始地址，便于之后手动「同步第三方头像」
+      // 并档也记录第三方头像原始地址，便于之后手动「同步第三方头像」；
+      // 若该用户还没有头像，后台异步转存第三方头像（已有自定义头像则不覆盖）
       await pool.query(`UPDATE users SET \`${providerCol}\` = ?, remote_avatar_url = ? WHERE id = ?`, [providerId, avatar || null, user.id]);
+      if (avatar && !user.avatar_url) {
+        localizeAvatar(user.id, avatar).catch((e) =>
+          console.error('[oauth-avatar] 并档头像后台转存失败（保留默认头像）:', String(e?.message || e))
+        );
+      }
     }
   }
   if (!user) {
     const nick = String(name || '第三方用户').slice(0, 50);
-    // 头像本地化：注册即下载第三方头像，走与用户上传同规格的校验转存；不通过则回落默认头像（不阻断注册）
-    let localAvatar = null;
-    if (avatar) {
-      try {
-        localAvatar = await saveAvatarFromUrl(avatar);
-      } catch (e) {
-        console.error('[oauth-avatar] 注册转存头像失败，使用默认头像:', String(e?.message || e));
-      }
-    }
+    // 头像本地化不阻塞注册：先建号（暂用默认头像，记录原始地址），后台异步下载转存，成功后回填 avatar_url
     const [r] = await pool.query(
       `INSERT INTO users (email, name, avatar_url, remote_avatar_url, \`${providerCol}\`, email_verified) VALUES (?, ?, ?, ?, ?, 1)`,
-      [email, nick, localAvatar, avatar || null, providerId]
+      [email, nick, null, avatar || null, providerId]
     );
     const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     user = created[0];
     createdNew = true;
+    if (avatar) {
+      localizeAvatar(user.id, avatar).catch((e) =>
+        console.error('[oauth-avatar] 注册头像后台转存失败（保留默认头像）:', String(e?.message || e))
+      );
+    }
+    return { user, createdNew };
+  }
+  // 老用户登录：来源地址有变化才写库（第三方换过头像地址后，重新登录一次即可继续手动同步）
+  if (avatar && user.remote_avatar_url !== avatar) {
+    await pool.query('UPDATE users SET remote_avatar_url = ? WHERE id = ?', [avatar, user.id]);
+    user.remote_avatar_url = avatar;
   }
   return { user, createdNew };
 }
@@ -460,6 +478,17 @@ authRouter.post('/avatar', authRequired, (req, res) => {
 // 简单限频：每用户 60 秒一次，防刷出站请求。
 const avatarRefreshAt = new Map(); // userId -> 上次成功同步时间戳
 const AVATAR_REFRESH_COOLDOWN = 60 * 1000;
+
+/** 现有头像是否仍是受支持的第三方外链（用于老用户 Google 头像来源回填） */
+function isAllowedAvatarUrl(s) {
+  if (!s || typeof s !== 'string' || !s.startsWith('https://')) return false;
+  try {
+    return isAllowedAvatarHost(new URL(s).hostname);
+  } catch {
+    return false;
+  }
+}
+
 authRouter.post('/avatar/refresh-oauth', authRequired, async (req, res, next) => {
   try {
     const last = avatarRefreshAt.get(req.user.id) || 0;
@@ -471,15 +500,27 @@ authRouter.post('/avatar/refresh-oauth', authRequired, async (req, res, next) =>
     if (!u || (!u.github_id && !u.google_id)) {
       return res.status(400).json({ error: '当前账号未绑定第三方登录，无法同步头像' });
     }
+    // 可选 body.provider：绑定了多个第三方时由前端让用户选择来源
+    const provider = String(req.body?.provider || '').toLowerCase();
+    if (provider && provider !== 'github' && provider !== 'google') {
+      return res.status(400).json({ error: 'provider 仅支持 github 或 google' });
+    }
+    const useGithub = provider ? provider === 'github' : !!u.github_id;
+    if (useGithub && !u.github_id) {
+      return res.status(400).json({ error: '该账号未绑定 GitHub，无法从 GitHub 同步头像' });
+    }
+    if (!useGithub && !u.google_id) {
+      return res.status(400).json({ error: '该账号未绑定 Google，无法从 Google 同步头像' });
+    }
     let url;
-    let reconstructed = false;
-    if (u.github_id) {
+    if (useGithub) {
       // GitHub 头像可由用户 id 直接构造公开地址（公开可访问，无需重新授权）
       url = `https://avatars.githubusercontent.com/u/${u.github_id}?size=460`;
-      reconstructed = true;
     } else {
-      // Google 头像地址不可从 id 推导，依赖注册/并档时存下的原始地址
+      // Google 头像地址不可从 id 推导：优先取登录时记录的原始地址；
+      // 老用户（记录功能上线前注册）若现有头像仍是第三方外链（白名单域名），直接回填当来源
       url = u.remote_avatar_url;
+      if (!url && isAllowedAvatarUrl(u.avatar_url)) url = u.avatar_url;
       if (!url) {
         return res.status(400).json({ error: '缺少第三方头像来源，请重新登录该第三方账号后再试' });
       }
@@ -491,13 +532,10 @@ authRouter.post('/avatar/refresh-oauth', authRequired, async (req, res, next) =>
       console.error('[oauth-avatar] 手动同步头像失败:', String(e?.message || e));
       return res.status(502).json({ error: '获取第三方头像失败，请稍后再试' });
     }
-    await pool.query(
-      'UPDATE users SET avatar_url = ?, remote_avatar_url = ? WHERE id = ?',
-      [local, reconstructed ? url : u.remote_avatar_url, u.id]
-    );
+    await pool.query('UPDATE users SET avatar_url = ?, remote_avatar_url = ? WHERE id = ?', [local, url, u.id]);
     avatarRefreshAt.set(u.id, Date.now());
     const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
-    res.json({ user: await publicUser(fresh[0]), url: local });
+    res.json({ user: await publicUser(fresh[0]), url: local, provider: useGithub ? 'github' : 'google' });
   } catch (e) {
     next(e);
   }

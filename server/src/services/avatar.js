@@ -2,6 +2,7 @@ import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
 import { oauthFetch } from './oauth-fetch.js';
+import { avatarRedirectHops, avatarTimeoutSeconds } from './settings.js';
 import { avatarsDir } from '../uploads.js';
 
 // 第三方头像下载转存：与用户上传头像同规格（类型 png/jpg/gif/webp、大小 ≤2MB、落盘 avatars 目录）。
@@ -30,19 +31,38 @@ function sniffImage(buf) {
   return null;
 }
 
+/** 带总超时的单次抓取：超时用 AbortController 中断，超过整体截止时间直接判超时 */
+async function fetchWithDeadline(url, deadline) {
+  const remain = deadline - Date.now();
+  if (remain <= 0) throw new Error('头像下载超时');
+  const ac = new AbortController();
+  const timer = setTimeout(() => ac.abort(new Error('头像下载超时')), remain);
+  try {
+    return await oauthFetch(url, { redirect: 'manual', headers: { 'User-Agent': 'shimmerblog' }, signal: ac.signal });
+  } catch (e) {
+    if (ac.signal.aborted) throw new Error('头像下载超时');
+    throw e;
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 /**
  * 下载第三方头像并转存为本站文件，返回站内 URL（/uploads/avatars/xxx）。
  * 校验失败（非 https / 域名不在白名单 / 超大小 / 类型不符 / 魔数不匹配）抛错，由调用方决定回落默认头像。
  */
-export async function saveAvatarFromUrl(rawUrl) {
+export async function saveAvatarFromUrl(rawUrl, opts = {}) {
   let target = String(rawUrl || '');
   let res = null;
+  // 重定向跳数上限（0–12）与总超时（1–300 秒）走后台 settings（默认 12 跳 / 60 秒），测试可用 opts 覆盖
+  const maxRedirects = opts.maxRedirects ?? (await avatarRedirectHops());
+  const deadline = Date.now() + (opts.timeoutMs ?? (await avatarTimeoutSeconds()) * 1000);
   // 手动跟随重定向（≤3 跳），每一跳都重新校验协议与域名，防止重定向绕过白名单
-  for (let hops = 0; hops < 4; hops++) {
+  for (let hops = 0; hops <= maxRedirects; hops++) {
     const u = new URL(target);
     if (u.protocol !== 'https:') throw new Error('头像地址必须为 https');
     if (!isAllowedAvatarHost(u.hostname)) throw new Error('第三方头像域名不受支持');
-    res = await oauthFetch(u.href, { redirect: 'manual', headers: { 'User-Agent': 'shimmerblog' } });
+    res = await fetchWithDeadline(u.href, deadline);
     if (res.status >= 300 && res.status < 400) {
       const loc = res.headers.get('location');
       if (!loc) throw new Error('头像下载失败：重定向缺少目标');

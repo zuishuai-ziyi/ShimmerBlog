@@ -207,6 +207,13 @@
               <label class="row"><span>代理地址</span><input v-model.trim="oauthForm.oauth_proxy_url" placeholder="http://127.0.0.1:7890" autocomplete="off" /></label>
             </div>
 
+            <div class="card">
+              <h2>第三方头像</h2>
+              <p class="hint">第三方登录头像转存本站时的下载限制：重定向跟随上限 0–12 跳、总超时 1–300 秒；注册/登录时后台异步下载，不阻塞用户操作。</p>
+              <label class="row"><span>重定向跳数上限</span><input v-model.trim="oauthForm.avatar_redirect_hops" type="number" min="0" max="12" /></label>
+              <label class="row"><span>下载超时（秒）</span><input v-model.trim="oauthForm.avatar_timeout_seconds" type="number" min="1" max="300" /></label>
+            </div>
+
             <div class="ops">
               <button class="primary" :disabled="saving" @click="saveOauthSettings">
                 {{ saving ? '保存中…' : '保存第三方登录设置' }}
@@ -443,7 +450,7 @@ function showFlash(msg: string) {
 }
 
 const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '', default_name_color: '' });
-const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '' });
+const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '', avatar_redirect_hops: '12', avatar_timeout_seconds: '60' });
 const githubEnabled = ref(false);
 const googleEnabled = ref(false);
 const ghSecretSet = ref(false);
@@ -511,6 +518,8 @@ async function bootstrap() {
     google_client_id: data.settings.google_client_id ?? '',
     google_client_secret: data.settings.google_client_secret ?? '',
     oauth_proxy_url: data.settings.oauth_proxy_url ?? '',
+    avatar_redirect_hops: data.settings.avatar_redirect_hops ?? '12',
+    avatar_timeout_seconds: data.settings.avatar_timeout_seconds ?? '60',
   });
   githubEnabled.value = !!data.githubEnabled;
   googleEnabled.value = !!data.googleEnabled;
@@ -560,7 +569,7 @@ async function saveMailSettings() {
 }
 
 async function saveOauthSettings() {
-  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url']);
+  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url', 'avatar_redirect_hops', 'avatar_timeout_seconds']);
 }
 
 async function saveCaptchaSettings() {

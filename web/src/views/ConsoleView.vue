@@ -66,13 +66,14 @@
             {{ uploadingAvatar ? '上传中…' : '更换头像' }}
           </label>
           <button
-            v-if="auth.user?.github_id || auth.user?.google_id"
+            v-for="p in oauthAvatarSources"
+            :key="p"
             class="upload-chip"
             type="button"
             :disabled="refreshingAvatar"
-            @click="refreshOAuthAvatar"
+            @click="refreshOAuthAvatar(p)"
           >
-            {{ refreshingAvatar ? '同步中…' : '更新第三方头像' }}
+            {{ oauthAvatarLabel(p) }}
           </button>
           <router-link class="space-link" :to="`/space/${auth.user?.id}`">我的空间 →</router-link>
         </div>
@@ -248,14 +249,24 @@ async function uploadAvatar(ev: Event) {
   }
 }
 
-/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见） */
+/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见；绑定了多个时分开两个按钮让用户选择来源） */
 const refreshingAvatar = ref(false);
-async function refreshOAuthAvatar() {
+const oauthAvatarSources = computed(() => {
+  const list: Array<'github' | 'google'> = [];
+  if (auth.user?.github_id) list.push('github');
+  if (auth.user?.google_id) list.push('google');
+  return list;
+});
+function oauthAvatarLabel(p: 'github' | 'google') {
+  if (refreshingAvatar.value) return '同步中…';
+  return oauthAvatarSources.value.length > 1 ? `从 ${p === 'github' ? 'GitHub' : 'Google'} 同步头像` : '从第三方同步头像';
+}
+async function refreshOAuthAvatar(provider?: 'github' | 'google') {
   if (refreshingAvatar.value) return;
   refreshingAvatar.value = true;
   profileError.value = '';
   try {
-    const { data } = await http.post<{ user: any }>('/auth/avatar/refresh-oauth');
+    const { data } = await http.post<{ user: any }>('/auth/avatar/refresh-oauth', provider ? { provider } : {});
     if (data.user) auth.user = data.user;
     profileNotice.value = '已从第三方同步头像';
   } catch (e) {

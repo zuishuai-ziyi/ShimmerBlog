@@ -594,3 +594,15 @@
   - **前端**：`ConsoleView` 个人资料与 `SpaceView` 编辑区在绑定过第三方时显示「更新第三方头像」按钮（`stores/auth.ts` User 接口 +`github_id`/`google_id`，SpaceView `SpaceUser` 同步）。
   - **弹窗误关闭修复**：根因是五视图 catch 里 `if (isCaptchaFailure(e)) return;` 把验证码错误吞掉后 action 以成功收场，`CaptchaDialog.onConfirm` 走成功分支 `close()`。修复：全部改为 `throw e` 重新抛给弹窗（LoginView doSubmit/doSendCode、ConsoleView、SpaceView、AdminView doLogin、ArticleEditor doSave/doUpload 共 6 处），由弹窗既有分流处理——验证码类错误留在弹窗内提示并自动换题，业务错误仍关闭弹窗由表单展示。直接提交路径（无弹窗）不会产生验证码类错误，重抛不会造成未处理拒绝。
 - 测试：smoke-auth **28/0**（+9：refresh 未登录 401 / 未绑定 400 / 绑 GitHub 后真实下载 avatars.githubusercontent.com 转存 200 + remote_avatar_url 落库 + 文件本站可访问 / 限频 429 / Google 无来源 400 / 白名单外域名 502）；回归 smoke-captcha 30/0、smoke-admin 73/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。
+
+## 60. 第三方头像同步五项修复：Google 来源缺失 / 多源选择 / 下载限制可配 / 弹窗失败提示 / 注册文案
+
+- 用户要求：①Google 登录账号更新头像提示「缺少第三方头像来源」（bug）；②「更新第三方头像」改「从第三方同步头像」，多源时让用户选择；③重定向跟随最多 12 跳 + 60s 超时，数据后台可改，头像获取不阻塞其他部分；④验证码未通过时在下方显示失败提示；⑤删注册页「注册需先验证邮箱…」文案。
+- 实现：
+  - **①来源缺失修复**（`server/src/routes/auth.js`）：根因是 Google 账号注册/并档于 `remote_avatar_url` 功能上线前，列为 NULL 且 Google picture URL 无法从 id 推导。三层修复：a) 每次第三方登录都刷新 `remote_avatar_url`（有变化才 UPDATE，老账号重新登录一次即恢复来源）；b) refresh 端点 Google 分支回填链——`remote_avatar_url` 为空时若现有 `avatar_url` 仍是白名单域名 https 外链（新 `isAllowedAvatarUrl()`），直接拿来当来源并落库；c) 并档分支若用户无头像也触发后台转存。
+  - **②多源选择**：refresh 端点接受可选 `body.provider`（`github`/`google`，非法 400；指定未绑定的来源 400「该账号未绑定 GitHub/Google…」；不指定保持 GitHub 优先）；`ConsoleView.vue`/`SpaceView.vue` 按钮改 `v-for` 渲染——单源一个「从第三方同步头像」、双源两个「从 GitHub/Google 同步头像」，文案函数 `oauthAvatarLabel()`。
+  - **③下载限制可配 + 不阻塞**：settings 新增 `avatar_redirect_hops`（0–12，默认 12）/`avatar_timeout_seconds`（1–300，默认 60），`services/settings.js` 新增钳制读取函数；`services/avatar.js` `saveAvatarFromUrl(url, opts)` 重定向循环 `≤maxRedirects` 跳、`fetchWithDeadline()` 用 AbortController 实现整体截止时间（每跳共享同一 deadline，超时中断）；admin.js PUT 校验（非整数 400、范围钳制）；AdminView「第三方登录」页新增「第三方头像」卡片两数字输入。注册/并档头像下载改为后台异步（INSERT 先行、`localizeAvatar()` fire-and-forget、失败仅日志），不再阻塞注册/登录主流程。
+  - **④弹窗失败提示**：根因是 `CaptchaDialog.onConfirm` catch 里先 `error.value=errMsg(e)` 再 `refresh()`，而 `load()` 开头清 `error` → 换题成功后提示被清空。修复：改为先 `reset()+await refresh()` 再设 `error`（点选组件下方 `.captcha-result` 小字）；手动「换一张」仍会清提示。
+  - **⑤**：删除 `LoginView.vue` 注册模式提示 `<p class="hint-tip">注册需先验证邮箱：点击发送验证码，10 分钟内有效</p>`。
+- 测试：smoke-auth **34/0**（+6：provider 非法 400 / 未绑定指定来源 400 / 双绑定 provider=google 强制走 Google 分支 502 / 双绑定默认 GitHub 200 且响应带 `provider:'github'` / 来源回填（旧外链 avatar_url）200 + remote_avatar_url 落库；github_id/google_id 唯一约束需先释放再绑给测试用户）；smoke-admin **76/0**（+3：avatar 限制保存回读与跳数钳至 12 / 非整数 400 / 还原默认）；回归 smoke-captcha 30/0、smoke-articles 24/0、`npm run build` 通过。
+- #lesson：①PowerShell 管道 `node -e "…\"…\"…"` 转义会被吃（Expected unicode escape）——一次性 SQL 用临时 .mjs 文件跑（放 server/scripts/ 下才有 node_modules 解析）；②smoke 脚本绑定唯一列（github_id 583231 / mock google sub）前必须先释放旧绑定，多段测试共用同一 mock id 会 ER_DUP_ENTRY 崩在半路留脏数据——崩溃后按邮箱模式清残留再重跑。

@@ -133,10 +133,11 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
     close();
   } catch (e: any) {
     if (isCaptchaFailure(e)) {
-      // 验证码未通过/失效/服务不可用：弹窗内下方小字提示并自动换题，直接重新点选即可
-      error.value = errMsg(e);
+      // 验证码未通过/失效/服务不可用：先换新题再设置提示（load() 会清 error，反序会被清掉），
+      // 失败原因显示在点选组件下方小字，直接重新点选即可
       reset();
       await refresh();
+      error.value = errMsg(e);
     } else {
       // 业务错误（如密码错误、昵称占用）：关闭弹窗，由表单层展示，避免误导为验证码问题
       close();

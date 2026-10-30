@@ -149,8 +149,43 @@ r = await post('/avatar/refresh-oauth', {}, t3);
 body = await r.json().catch(() => ({}));
 ok('avatar refresh 白名单外域名 502', r.status === 502, `${r.status} ${body.error ?? ''}`);
 
+// provider 参数：显式指定来源；绑定多个第三方时前端让用户选择
+r = await post('/avatar/refresh-oauth', { provider: 'bogus' }, t3);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh provider 非法 400', r.status === 400 && String(body.error || '').includes('provider'), `${r.status} ${body.error ?? ''}`);
+
+r = await post('/avatar/refresh-oauth', { provider: 'github' }, t3);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh 未绑定指定来源 400', r.status === 400 && String(body.error || '').includes('未绑定 GitHub'), `${r.status} ${body.error ?? ''}`);
+
+// 双绑定用户：provider=google 强制走 Google 分支（remote_avatar_url 邪恶域名 → 502，证明 provider 生效）；
+// 不指定 provider 默认走 GitHub（可由 id 构造地址）
+const bothMail = `avboth-${Date.now()}@shimmer.dev`;
+r = await post('/send-code', { email: bothMail });
+const bothCode = (await r.json().catch(() => ({}))).devCode ?? (await latestCode(bothMail));
+r = await post('/login/code', { email: bothMail, code: bothCode });
+const t4 = (await r.json().catch(() => ({}))).token;
+// github_id 唯一：先把 583231 从前面的测试用户释放，再绑给双绑定用户
+await pool.query('UPDATE users SET github_id = NULL WHERE email = ?', [MAIL]);
+await pool.query("UPDATE users SET github_id = 583231, google_id = 'mock-google-sub-b', remote_avatar_url = 'https://evil.example/a.png', avatar_url = NULL WHERE email = ?", [bothMail]);
+r = await post('/avatar/refresh-oauth', { provider: 'google' }, t4);
+ok('双绑定 provider=google 强制走 Google 分支 502', r.status === 502, String(r.status));
+r = await post('/avatar/refresh-oauth', {}, t4);
+body = await r.json().catch(() => ({}));
+ok('双绑定不指定 provider 默认 GitHub 200', r.status === 200 && body.provider === 'github' && body.url?.startsWith('/uploads/avatars/'), `${r.status} ${body.error ?? body.url ?? ''}`);
+
+// 来源回填：老用户 remote_avatar_url 为空但现有头像仍是白名单域名外链 → 直接拿来当来源（Google 分支）
+await pool.query("UPDATE users SET remote_avatar_url = NULL, avatar_url = 'https://avatars.githubusercontent.com/u/583231?size=460' WHERE email = ?", [syncMail]);
+r = await post('/avatar/refresh-oauth', { provider: 'google' }, t3);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh 来源回填（旧外链 avatar_url）200', r.status === 200 && body.provider === 'google' && body.url?.startsWith('/uploads/avatars/'), `${r.status} ${body.error ?? body.url ?? ''}`);
+if (r.status === 200) {
+  const [brows] = await pool.query('SELECT remote_avatar_url FROM users WHERE email = ?', [syncMail]);
+  ok('回填后 remote_avatar_url 已记录', String(brows[0]?.remote_avatar_url || '').includes('avatars.githubusercontent.com'), String(brows[0]?.remote_avatar_url));
+}
+
 // 清理本脚本创建的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
-await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail]]);
+await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail, bothMail]]);
 
 console.log(`\n== ${pass} pass, ${fail} fail ==`);
 process.exit(fail ? 1 : 0);

@@ -179,6 +179,16 @@ async function main() {
   const pCleared = await req('GET', '/admin/settings', { token: adminToken });
   check('oauth_proxy_url 清空', pCleared.data?.settings?.oauth_proxy_url === '', String(pCleared.data?.settings?.oauth_proxy_url));
 
+  // 第三方头像下载限制：跳数/超时保存回读；超出范围鍳制；非整数拒收
+  await req('PUT', '/admin/settings', { token: adminToken, body: { avatar_redirect_hops: 99, avatar_timeout_seconds: 5 } });
+  const avSet = await req('GET', '/admin/settings', { token: adminToken });
+  check('avatar 限制保存且跳数鍳至上限 12', avSet.data?.settings?.avatar_redirect_hops === '12' && avSet.data?.settings?.avatar_timeout_seconds === '5', `${avSet.data?.settings?.avatar_redirect_hops}/${avSet.data?.settings?.avatar_timeout_seconds}`);
+  const avBad = await req('PUT', '/admin/settings', { token: adminToken, body: { avatar_timeout_seconds: 'abc' } });
+  check('avatar 限制非整数 400', avBad.status === 400, String(avBad.status));
+  await req('PUT', '/admin/settings', { token: adminToken, body: { avatar_redirect_hops: 12, avatar_timeout_seconds: 60 } });
+  const avBack = await req('GET', '/admin/settings', { token: adminToken });
+  check('avatar 限制已还原默认', avBack.data?.settings?.avatar_redirect_hops === '12' && avBack.data?.settings?.avatar_timeout_seconds === '60', `${avBack.data?.settings?.avatar_redirect_hops}/${avBack.data?.settings?.avatar_timeout_seconds}`);
+
   const newTitle = `微光博客·${rnd()}`;
   const put = await req('PUT', '/admin/settings', { token: adminToken, body: { site_title: newTitle, github_client_secret: '__KEEP__' } });
   check('保存配置 200', put.status === 200, JSON.stringify(put.data));

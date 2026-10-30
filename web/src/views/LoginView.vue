@@ -46,7 +46,6 @@
               {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
             </button>
           </div>
-          <p class="hint-tip">注册需先验证邮箱：点击发送验证码，10 分钟内有效</p>
         </div>
 
         <p v-if="error" class="error-tip">{{ error }}</p>

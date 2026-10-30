@@ -34,13 +34,14 @@
         <button class="btn-save" :disabled="saving" @click="saveProfile">{{ saving ? '保存中…' : '保存' }}</button>
         <button class="btn-cancel" @click="editing = false">取消</button>
         <button
-          v-if="user?.github_id || user?.google_id"
+          v-for="p in oauthAvatarSources"
+          :key="p"
           class="btn-cancel"
           type="button"
           :disabled="refreshingAvatar"
-          @click="refreshOAuthAvatar"
+          @click="refreshOAuthAvatar(p)"
         >
-          {{ refreshingAvatar ? '同步中…' : '更新第三方头像' }}
+          {{ oauthAvatarLabel(p) }}
         </button>
         <span v-if="editMsg" class="edit-msg" :class="{ err: !editOk }">{{ editMsg }}</span>
       </div>
@@ -140,14 +141,24 @@ async function saveProfile() {
   await doSaveProfile();
 }
 
-/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见） */
+/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见；绑定了多个时分开两个按钮让用户选择来源） */
 const refreshingAvatar = ref(false);
-async function refreshOAuthAvatar() {
+const oauthAvatarSources = computed(() => {
+  const list: Array<'github' | 'google'> = [];
+  if (user.value?.github_id) list.push('github');
+  if (user.value?.google_id) list.push('google');
+  return list;
+});
+function oauthAvatarLabel(p: 'github' | 'google') {
+  if (refreshingAvatar.value) return '同步中…';
+  return oauthAvatarSources.value.length > 1 ? `从 ${p === 'github' ? 'GitHub' : 'Google'} 同步头像` : '从第三方同步头像';
+}
+async function refreshOAuthAvatar(provider?: 'github' | 'google') {
   if (refreshingAvatar.value) return;
   refreshingAvatar.value = true;
   editOk.value = false;
   try {
-    await http.post('/auth/avatar/refresh-oauth');
+    await http.post('/auth/avatar/refresh-oauth', provider ? { provider } : {});
     await load(); // 重新拉取本人资料，头像即更新
     editOk.value = true;
     editMsg.value = '✓ 已从第三方同步头像';
