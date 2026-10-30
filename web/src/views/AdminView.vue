@@ -19,11 +19,10 @@
             <button type="submit" :disabled="busy">{{ busy ? '验证中…' : '进入后台' }}</button>
           </form>
           <p v-if="gateError" class="gate-err">{{ gateError }}</p>
-          <p class="gate-hint">管理密码与用户账号无关，仅用于本后台。</p>
+          <CaptchaDialog v-model:open="gateCaptchaOpen" :action="doLoginWithCaptcha" inline />
           </div>
       </div>
       <SiteFooter tone="light" />
-      <CaptchaDialog v-model:open="gateCaptchaOpen" :action="doLoginWithCaptcha" />
     </div>
 
     <!-- ======== 后台主体 ======== -->
@@ -971,6 +970,13 @@ onMounted(async () => {
 }
 
 /* 登录门：内容列 + 底部页脚，整体撑满视口 */
+.admin input,
+.admin select,
+.admin textarea {
+  /* 后台浅色卡片：覆盖全局暗色主题给 input 的白字默认（漏网类型如 number/select 白字配近白底不可读） */
+  color: var(--text-1);
+}
+
 .gate-col {
   display: flex;
   flex-direction: column;
@@ -1061,12 +1067,6 @@ onMounted(async () => {
   color: var(--red);
   font-size: 13px;
   margin: 14px 0 0;
-}
-
-.gate-hint {
-  color: var(--text-3);
-  font-size: 12.5px;
-  margin: 16px 0 0;
 }
 
 /* 主体布局 */

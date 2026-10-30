@@ -626,3 +626,9 @@
 ### 61.2 重构：弹窗框架与验证模式解耦
 - 按 61.1 同一设计统一：两种引擎一律 `dialog.show()` 非模态打开 + `.captcha-modal` 自绘全屏遮罩（fixed inset 0、z-index 99999、flex 居中、blur 遮罩），卡片视觉在 `.captcha-panel` 内层；删除按 provider 分流的 showModal()/classList('captcha-modal--flat') 逻辑与死掉的 ::backdrop 规则；Esc 统一走手动 keydown 捕获（打开注册/关闭清理）；模板一套，引擎只决定内容区（gocaptcha Click 组件 vs recaptcha div）。
 - 验证：`npm run build` 通过（CaptchaDialog-Dmfwbhh0.js）；线上 bundle 哈希对齐后收尾。
+
+## 62. 后台三处修改：输入框白字不可读 / 删管理密码提示 / 验证码内联
+- **①后台部分文本框白字不可读**：根因全站暗色主题给所有 input/select/textarea 默认 `color: var(--text)`（白）+ 半透明深底；后台浅色卡片内 `.row input[type='text']/password/email/:not([type])`、`.gate-card input`、`.modal input`、`.search` 已覆盖为深字，但漏网类型（`type=number`——第 60 轮新加「重定向跳数/下载超时」、`select`——验证码服务类型下拉等）继承白字叠在半透明浅底上不可读。修复：AdminView scoped 加容器级兜底 `.admin input/select/textarea { color: var(--text-1) }`，一劳永逸覆盖任何类型。
+- **②**删除管理登录卡片「管理密码与用户账号无关，仅用于本后台。」文案及 .gate-hint 样式。
+- **③后台验证码内联**：CaptchaDialog 新增 `inline` prop——内联模式直接置 `dialog.open` attribute（普通文档流面板：`captcha-modal--inline` 样式 position:static、无遮罩/顶层/Esc/锁滚动），复用同一套模板与双引擎内容；AdminView 登录门 `<CaptchaDialog ... inline />` 移入 gate-card 内表单下方（登录时后端返回 CAPTCHA_REQUIRED 后验证码组件直接展开在登录框下，不再弹独立对话框）。
+- 验证：`npm run build` 通过（AdminView-DuATwKB0.js、CaptchaDialog-BscP1K9h.js）；推送后线上哈希对齐。

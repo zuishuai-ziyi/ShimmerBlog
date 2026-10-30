@@ -25,6 +25,8 @@ import { errMsg, isCaptchaFailure } from '../api/http';
 const props = defineProps<{
   open: boolean;
   action: (captcha: { key: string; value: string }) => Promise<void>;
+  /** 内联模式：不弹浮层，作为普通面板嵌在宿主表单下方（后台登录门用） */
+  inline?: boolean;
 }>();
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>();
 
@@ -182,7 +184,10 @@ watch(
     if (v) {
       await nextTick();
       const d = dlgEl.value;
-      if (d && !d.open) {
+      if (props.inline) {
+        // 内联：直接置 open 属性（普通文档流面板，无遮罩/顶层/Esc/锁滚动）
+        if (d) d.open = true;
+      } else if (d && !d.open) {
         // 统一非模态打开：不进顶层（否则 Google 挑战弹层 z≈2e9 被盖），框架与引擎无关
         d.show();
         window.addEventListener('keydown', onEscKey, true);
@@ -254,7 +259,14 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
 </script>
 
 <template>
-  <dialog ref="dlgEl" class="captcha-modal" aria-labelledby="captcha-dlg-title" @close="onDialogClose">
+  <dialog
+    ref="dlgEl"
+    class="captcha-modal"
+    :class="{ 'captcha-modal--inline': inline }"
+    :open="inline ? open : undefined"
+    aria-labelledby="captcha-dlg-title"
+    @close="onDialogClose"
+  >
     <div class="captcha-panel">
     <div class="captcha-head">
       <span id="captcha-dlg-title" class="captcha-title">安全验证</span>
@@ -304,6 +316,20 @@ dialog.captcha-modal {
   align-items: center;
   justify-content: center;
   color: var(--text, #e8eef6);
+}
+
+/* 内联模式：嵌在宿主表单下方的普通面板（后台登录门），无遮罩无定位 */
+dialog.captcha-modal--inline {
+  position: static;
+  display: block;
+  width: min(360px, calc(100vw - 32px));
+  height: auto;
+  margin: 12px auto 0;
+  padding: 0;
+  background: none;
+  backdrop-filter: none;
+  -webkit-backdrop-filter: none;
+  z-index: auto;
 }
 
 .captcha-panel {
