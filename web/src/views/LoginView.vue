@@ -126,7 +126,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import http, { errMsg } from '../api/http';
+import http, { errMsg, isCaptchaRequired } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -188,6 +188,11 @@ const captchaAction = async (c: Captcha) => {
 
 async function submit() {
   if (loading.value) return;
+  // 注册：发码时已验过一次（验证码信用），先直接提交；信用缺失时后端回 CAPTCHA_REQUIRED 再弹窗补验
+  if (mode.value === 'register') {
+    await doSubmit();
+    return;
+  }
   if (requestCaptcha('submit')) await doSubmit();
 }
 
@@ -213,6 +218,11 @@ async function doSubmit(captcha?: Captcha) {
     await auth.setToken(data.token);
     router.replace(redirect.value);
   } catch (e) {
+    if (isCaptchaRequired(e)) {
+      // 注册信用缺失/过期 → 补一次行为验证，确认后自动重提交
+      requestCaptcha('submit');
+      return;
+    }
     error.value = errMsg(e);
   } finally {
     loading.value = false;

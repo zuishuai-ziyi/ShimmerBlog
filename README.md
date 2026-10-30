@@ -99,7 +99,10 @@ cd ../web && npm run dev
 - **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
 - **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub/Google 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
 - **发件人格式**：必须包含邮箱地址，推荐 `名称 <you@domain.com>`；只填名称会被自动包装成 `"名称" <SMTP 账号>`（否则 nodemailer 拿不到地址，信封 Return-Path 为空、无 From 头，外域邮箱会拒收或进垃圾桶，且退信也发不回来）。
-- **行为验证码（GoCaptcha）**：接入独立部署的 [go-captcha-service](https://github.com/wenlng/go-captcha)（点选文字验证码）。后台「站点」页开启并填服务地址后，登录、注册、发送邮箱验证码、发布文章、上传图片、修改资料（昵称/简介）与后台登录均需先完成点选验证；前端弹窗取题（`GET {captcha_api}/api/v1/public/get-data?id={captcha_id}`），后端二次校验（`POST {captcha_verify_api‖captcha_api}/api/v1/public/check-data`）并做进程内一 key 一用防重放（服务端校验成功后 key 并不立刻作废）；验证码服务不可用时 fail-closed（502，不放行）。UI 文案随站点返回的 `captchaEnabled/captchaApi/captchaId` 自动启停，未开启时零打扰。
+- **行为验证码（GoCaptcha）**：接入独立部署的 [go-captcha-service](https://github.com/wenlng/go-captcha)（点选文字验证码）。后台「站点」页开启并填服务地址后生效；前端弹窗取题（`GET {captcha_api}/api/v1/public/get-data?id={captcha_id}`），后端二次校验（`POST {captcha_verify_api‖captcha_api}/api/v1/public/check-data`）并做进程内一 key 一用防重放（服务端校验成功后 key 并不立刻作废）；验证码服务不可用时 fail-closed（502，不放行）。UI 文案随站点返回的 `captchaEnabled/captchaApi/captchaId` 自动启停，未开启时零打扰。
+  - **强验证端点**（未验证直接拦截）：登录、发送邮箱验证码、发布文章、上传图片、后台登录。
+  - **信用制免二次验证**：注册 / 魔法链接登录（`/auth/login/code`）在「发送邮箱验证码」时验证一次，提交时凭信用（10 分钟内一次）免二次验证，不打扰正常用户；无信用且未带验证码返回 `CAPTCHA_REQUIRED`，前端自动弹窗补验后重提交（攻击者仍需一次真实验证 + 邮箱码，安全性不降）。
+  - **风控验证**：修改资料（昵称/简介）10 分钟窗口内前 2 次免验证，超出频率要求完成验证码（带码直接验证通过）；携带验证码的请求必须验证通过，失败不影响信用。
 
 ## API 概览
 
@@ -141,7 +144,7 @@ node scripts/smoke-auth.mjs       # 19 项：注册（含邮箱验证码校验�
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 73 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/第三方登录与出站代理配置/默认用户名颜色/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）
-node scripts/smoke-captcha.mjs    # 22 项：GoCaptcha 行为验证码（mock 服务：各保护端点拦截/放行/一 key 一用防重放/服务不可用 502 fail-closed/配置还原）
+node scripts/smoke-captcha.mjs    # 30 项：GoCaptcha 行为验证码（mock 服务：强验证端点拦截/放行、注册与魔法登录信用制免二次验证、错码兑底拦截、资料修改风控窗口、一 key 一用防重放、服务不可用 502 fail-closed、配置还原）
 cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 ```
 

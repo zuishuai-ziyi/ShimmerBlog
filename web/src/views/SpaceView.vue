@@ -48,9 +48,11 @@
         <p class="item-summary">{{ a.summary || '（暂无摘要）' }}</p>
         <p class="item-date">{{ fmtDate(a.published_at || a.created_at) }}</p>
       </router-link>
-      <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
-</div>
+    </div>
     <p v-else class="empty">还没有公开的文章。</p>
+
+    <!-- 验证码弹窗：放在用户区块内、列表分支外，保证编辑资料时始终已挂载 -->
+    <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
     </template>
   </div>
 </template>
@@ -58,7 +60,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import http, { errMsg } from '../api/http';
+import http, { errMsg, isCaptchaRequired } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -123,11 +125,7 @@ function openEdit() {
 }
 
 async function saveProfile() {
-  // 启用行为验证码时先弹窗（后端 PUT /auth/profile 有 captchaGuard）
-  if (site.info.captchaEnabled) {
-    profileCaptchaOpen.value = true;
-    return;
-  }
+  // 正常修改零打扰：直接保存；频繁修改（10 分钟内第 3 次起）时后端回 CAPTCHA_REQUIRED，自动弹窗补验
   await doSaveProfile();
 }
 
@@ -155,6 +153,11 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
     setTimeout(() => (editing.value = false), 800);
   } catch (e) {
     editOk.value = false;
+    if (isCaptchaRequired(e)) {
+      editMsg.value = '检测到频繁修改，请完成安全验证';
+      profileCaptchaOpen.value = true;
+      return;
+    }
     editMsg.value = errMsg(e);
   } finally {
     saving.value = false;

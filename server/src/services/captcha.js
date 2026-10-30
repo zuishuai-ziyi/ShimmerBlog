@@ -79,3 +79,67 @@ export function captchaGuard(req, res, next) {
     .then((r) => (r.ok ? next() : res.status(r.status).json({ error: r.error })))
     .catch(next);
 }
+
+/* ---------- 验证码信用：一次验证覆盖同一用户的后续一步 ----------
+ * 场景：注册/魔法登录需要先发邮箱码，若发码与提交各验一次则用户要过两关。
+ * send-code 通过行为验证后签发信用（IP+邮箱+用途，10 分钟内一次一用），
+ * 后续 register / login/code 无需再验——仍需邮箱码，安全性不降。
+ */
+const credits = new Map(); // `${ip}|${email}|${purpose}` -> 签发时间
+const CREDIT_TTL = 10 * 60 * 1000;
+
+function creditSweep() {
+  const now = Date.now();
+  for (const [k, t] of credits) {
+    if (now - t > CREDIT_TTL) credits.delete(k);
+  }
+}
+
+/** send-code 成功后调用：给该 IP+邮箱+用途签发一次性信用 */
+export function grantCaptchaCredit(ip, email, purpose) {
+  creditSweep();
+  credits.set(`${String(ip)}|${String(email).toLowerCase()}|${purpose}`, Date.now());
+}
+
+function consumeCaptchaCredit(ip, email, purpose) {
+  const k = `${String(ip)}|${String(email).toLowerCase()}|${purpose}`;
+  const t = credits.get(k);
+  if (t === undefined) return false;
+  credits.delete(k); // 一次一用
+  return Date.now() - t <= CREDIT_TTL;
+}
+
+function captchaPayloadPresent(raw) {
+  let p = raw;
+  if (typeof p === 'string') {
+    try {
+      p = JSON.parse(p);
+    } catch {
+      p = null;
+    }
+  }
+  return !!(p && p.key && p.value);
+}
+
+/**
+ * Express 中间件：验证码可选——
+ * - 未启用 → 放行；
+ * - 携带了验证码 → 必须校验通过（错码/失效/服务不可用直接回错误）；
+ * - 未携带 → 消费一次验证码信用，无信用则 400 { code: 'CAPTCHA_REQUIRED' }
+ *   （前端据此按需弹窗，正常用户零打扰）。
+ */
+export function captchaOptionalGuard(purpose, getEmail) {
+  return function (req, res, next) {
+    verifyCaptcha(req.body?.captcha)
+      .then((r) => {
+        if (r.ok) return next();
+        if (captchaPayloadPresent(req.body?.captcha)) {
+          return res.status(r.status).json({ error: r.error });
+        }
+        const email = String(getEmail?.(req) ?? '').trim();
+        if (email && consumeCaptchaCredit(req.ip, email, purpose)) return next();
+        return res.status(400).json({ error: '请完成行为验证', code: 'CAPTCHA_REQUIRED' });
+      })
+      .catch(next);
+  };
+}

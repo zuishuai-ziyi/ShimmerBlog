@@ -5,7 +5,7 @@
  * 校验通过放行、一 key 一用（防重放）、验证码服务不可用 502（fail-closed），最后还原配置。
  */
 import http from 'node:http';
-import { registerUser, latestCode } from './_test-lib.mjs';
+import { latestCode } from './_test-lib.mjs';
 
 const BASE = process.env.SB_BASE || 'http://127.0.0.1:3010/api';
 const MOCK_PORT = Number(process.env.SB_CAPTCHA_MOCK_PORT || 9797);
@@ -71,7 +71,7 @@ async function req(method, path, { token, body } = {}) {
 
 // 每次「取题」都会得到新 key（真实流程 get-data 每次返回新的 captcha_key），这里用自增 key 模拟
 let keySeq = 0;
-const good = () => ({ key: `k-${++keySeq}`, value: '10,20,30,40' });
+const good = () => ({ key: `k-${Date.now()}-${++keySeq}`, value: '10,20,30,40' }); // 带时间戳：服务端 consumed Map（31min TTL）跨轮不碰撞
 
 /* ---------- 前置：管理员登录 + 备份并开启验证码配置 ---------- */
 const adminLogin = await req('POST', '/admin/login', { body: { password: process.env.SB_ADMIN_PASSWORD || '123456' } });
@@ -98,25 +98,36 @@ ok('开启验证码 200', r.status === 200 && r.data.captchaEnabled === true);
 r = await req('GET', '/site');
 ok('/site 暴露 captchaEnabled/captchaApi/captchaId', r.data.captchaEnabled === true && r.data.captchaApi === `http://127.0.0.1:${MOCK_PORT}` && r.data.captchaId === 'click-default-ch');
 
-/* ---------- 注册一个测试用户（发码/注册本身也要过验证码） ---------- */
+/* ---------- 注册：发码（带验证码）→ 注册免二次验证（验证码信用） ---------- */
 mode = 'ok';
 const MAIL = `cap-${Date.now()}@shimmer.dev`;
 r = await req('POST', '/auth/send-code', { body: { email: MAIL, purpose: 'register', captcha: good() } });
 ok('send-code 带正确验证码 200', r.status === 200 && r.data.sent === true);
 
-const reg = await registerUser(BASE, { email: MAIL, password: 'pass123456', name: '验证码测试' });
-// registerUser 内部不带 captcha —— 会 400；改为手动带码注册
-let token = '';
-if (reg.status === 201) token = reg.data.token;
-else {
-  // 预期路径：registerUser 已把验证码发了但注册被 captcha 拦下，这里补发码+带 captcha 注册
-  const send = await req('POST', '/auth/send-code', { body: { email: MAIL, purpose: 'register', captcha: good() } });
-  const code = send.data.devCode || (await latestCode(MAIL, 'register'));
-  const rr = await req('POST', '/auth/register', { body: { email: MAIL, password: 'pass123456', name: '验证码测试', code, captcha: good() } });
-  ok('register 带验证码 201', rr.status === 201, JSON.stringify(rr.data));
-  token = rr.data.token || '';
-}
+// 发码已验证 → 注册不再要求验证码（信用一次一用）
+const regCode = r.data.devCode || (await latestCode(MAIL, 'register'));
+r = await req('POST', '/auth/register', { body: { email: MAIL, password: 'pass123456', name: '验证码测试', code: regCode } });
+ok('注册免二次验证（信用）201', r.status === 201, JSON.stringify(r.data));
+let token = r.data.token || '';
+
+// 无信用且未携带验证码 → 400 CAPTCHA_REQUIRED
+const MAIL2 = `cap2-${Date.now()}@shimmer.dev`;
+r = await req('POST', '/auth/register', { body: { email: MAIL2, password: 'pass123456', name: 'x', code: '123456' } });
+ok('注册无信用无验证码 400 CAPTCHA_REQUIRED', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
+
+// 带验证码可直接注册（无信用兑底路径）
+r = await req('POST', '/auth/send-code', { body: { email: MAIL2, purpose: 'register', captcha: good() } });
+const code2 = r.data.devCode || (await latestCode(MAIL2, 'register'));
+r = await req('POST', '/auth/register', { body: { email: MAIL2, password: 'pass123456', name: 'x2', code: code2, captcha: good() } });
+ok('注册带验证码（兑底）201', r.status === 201, JSON.stringify(r.data));
 ok('测试用户 token 就绪', !!token);
+
+// 携带错误验证码且无信用 → 直接回验证错误（不吃信用）
+mode = 'failure';
+const MAIL3 = `cap3-${Date.now()}@shimmer.dev`;
+r = await req('POST', '/auth/register', { body: { email: MAIL3, password: 'pass123456', name: 'x3', code: '123456', captcha: good() } });
+ok('注册错验证码 400', r.status === 400 && /验证未通过/.test(r.data.error || ''), JSON.stringify(r.data));
+mode = 'ok';
 
 /* ---------- 各保护端点 ---------- */
 // 1. 登录：缺 captcha → 400
@@ -140,17 +151,31 @@ ok('login 正确验证码+正确密码 200', r.status === 200);
 r = await req('POST', '/auth/login', { body: { email: MAIL, password: 'pass123456', captcha: kk } });
 ok('同一 key 重放 400', r.status === 400 && /已失效/.test(r.data.error || ''), JSON.stringify(r.data));
 
+// 4b. 魔法登录：发码（带验证码）→ login/code 免二次验证（信用）
+r = await req('POST', '/auth/send-code', { body: { email: MAIL, purpose: 'login', captcha: good() } });
+ok('send-code(login) 带验证码 200', r.status === 200 && r.data.sent === true);
+const lc = r.data.devCode || (await latestCode(MAIL, 'login'));
+r = await req('POST', '/auth/login/code', { body: { email: MAIL, code: lc } });
+ok('login/code 免二次验证（信用）200', r.status === 200 && !!r.data.token, JSON.stringify(r.data));
+
 // 5. 后台登录：缺验证码 → 400；通过 → 错误密码 401
 r = await req('POST', '/admin/login', { body: { password: process.env.SB_ADMIN_PASSWORD || '123456' } });
 ok('admin login 缺验证码 400', r.status === 400);
 r = await req('POST', '/admin/login', { body: { password: 'definitely-wrong', captcha: good() } });
 ok('admin login 验证码通过后到密码校验 401', r.status === 401);
 
-// 6. 修改资料：缺验证码 → 400；带正确验证码 → 200
-r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试' } });
-ok('profile 缺验证码 400', r.status === 400);
-r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试', bio: 'bio', captcha: good() } });
+// 6. 修改资料：正常修改免验证；10 分钟内第 3 次起要求验证码（风控）
+r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试1' } });
+ok('profile 第 1 次免验证 200', r.status === 200, JSON.stringify(r.data));
+r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试2' } });
+ok('profile 第 2 次免验证 200', r.status === 200, JSON.stringify(r.data));
+r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试3' } });
+ok('profile 第 3 次要求验证 400 CAPTCHA_REQUIRED', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
+r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试4', captcha: good() } });
 ok('profile 带验证码 200', r.status === 200, JSON.stringify(r.data));
+// 窗口内计数含带码那次（t1,t2,t4）→ 第 5 次仍被风控拦
+r = await req('PUT', '/auth/profile', { token, body: { name: '改名测试5' } });
+ok('profile 风控窗口内再次要求验证 400', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
 
 // 7. 发布文章：缺验证码 → 400；带验证码（空标题穿过后被业务校验拦下）
 r = await req('POST', '/articles', { token, body: { title: 't', content: 'c', status: 'draft' } });

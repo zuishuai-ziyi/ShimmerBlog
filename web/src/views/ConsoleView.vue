@@ -49,8 +49,7 @@
             <div class="row-actions">
               <button class="link-btn" @click="startEdit(a.id)">编辑</button>
               <button class="link-btn danger" @click="remove(a)">删除</button>
-              <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
-</div>
+            </div>
           </li>
         </ul>
       </template>
@@ -87,6 +86,8 @@
           <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
         </div>
       </form>
+      <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
+      <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
     </section>
   </main>
 </template>
@@ -94,7 +95,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import http, { errMsg } from '../api/http';
+import http, { errMsg, isCaptchaRequired } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -183,11 +184,8 @@ watch(
 );
 
 async function saveProfile() {
-  // 启用行为验证码时先弹窗（后端 PUT /auth/profile 有 captchaGuard）
-  if (site.info.captchaEnabled) {
-    profileCaptchaOpen.value = true;
-    return;
-  }
+  // 正常修改零打扰：直接保存；后端检测到频繁修改（10 分钟内第 3 次起）才回 CAPTCHA_REQUIRED，
+  // 届时自动弹出验证窗，验证通过后自动重试
   await doSaveProfile();
 }
 
@@ -205,6 +203,12 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
     if (data.user) auth.user = data.user;
     profileNotice.value = '已保存';
   } catch (e) {
+    if (isCaptchaRequired(e)) {
+      profileError.value = '';
+      profileNotice.value = '检测到频繁修改，请完成安全验证';
+      profileCaptchaOpen.value = true;
+      return;
+    }
     profileError.value = errMsg(e);
   } finally {
     savingProfile.value = false;

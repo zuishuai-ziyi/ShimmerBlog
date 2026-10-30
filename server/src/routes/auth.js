@@ -6,7 +6,13 @@ import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
 import { sendCodeEmail, sendWelcomeEmail } from '../services/mailer.js';
-import { captchaGuard } from '../services/captcha.js';
+import {
+  captchaGuard,
+  captchaOptionalGuard,
+  grantCaptchaCredit,
+  verifyCaptcha,
+  captchaConfig,
+} from '../services/captcha.js';
 import { githubConfig, googleConfig, oauthProxy, webOrigin, getSetting } from '../services/settings.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
@@ -66,8 +72,10 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
   return { user, createdNew };
 }
 
-/* ---------- 注册（邮箱 + 密码） ---------- */
-authRouter.post('/register', captchaGuard, async (req, res, next) => {
+/* ---------- 注册（邮箱 + 密码） ----------
+ * 验证码：send-code 时已验过一次（签发信用），此处优先吃信用；
+ * 信用缺失（过期/跨机器）且未携带验证码 → 400 CAPTCHA_REQUIRED 由前端按需弹窗。 */
+authRouter.post('/register', captchaOptionalGuard('register', (req) => req.body?.email), async (req, res, next) => {
   try {
     const { email, password, name, code } = req.body ?? {};
     if ((await getSetting('register_open')) !== '1') {
@@ -163,6 +171,10 @@ authRouter.post('/send-code', codeLimiter, captchaGuard, async (req, res, next) 
       expires,
     ]);
     const viaSmtp = await sendCodeEmail(email, code);
+    // 发码且通过了行为验证 → 签发一次性信用，后续 register/login/code 免二次验证
+    if (purpose === 'register' || purpose === 'login') {
+      grantCaptchaCredit(req.ip, mail, purpose);
+    }
     // 开发模式（SMTP 未配置）时把验证码带回去，方便本地联调；SMTP 配好后自动消失
     res.json({ sent: true, via: viaSmtp ? 'smtp' : 'console', devCode: viaSmtp ? undefined : code });
   } catch (e) {
@@ -170,7 +182,7 @@ authRouter.post('/send-code', codeLimiter, captchaGuard, async (req, res, next) 
   }
 });
 
-authRouter.post('/login/code', captchaGuard, async (req, res, next) => {
+authRouter.post('/login/code', captchaOptionalGuard('login', (req) => req.body?.email), async (req, res, next) => {
   try {
     const { email, code } = req.body ?? {};
     const mail = String(email ?? '').toLowerCase();
@@ -382,7 +394,18 @@ authRouter.get('/me', authRequired, async (req, res) => {
   res.json({ user: await publicUser(req.user) });
 });
 
-authRouter.put('/profile', authRequired, captchaGuard, async (req, res, next) => {
+// 资料修改风控：正常修改零打扰，10 分钟内第 3 次起要求行为验证（防滥用刷屏）
+const profileEdits = new Map(); // userId -> 最近成功修改时间戳数组
+const PROFILE_EDIT_WINDOW = 10 * 60 * 1000;
+const PROFILE_EDIT_FREE = 2;
+function profileEditRisk(userId) {
+  const now = Date.now();
+  const arr = (profileEdits.get(userId) || []).filter((t) => now - t < PROFILE_EDIT_WINDOW);
+  profileEdits.set(userId, arr);
+  return arr.length >= PROFILE_EDIT_FREE;
+}
+
+authRouter.put('/profile', authRequired, async (req, res, next) => {
   try {
     const { name, bio, avatar_url } = req.body ?? {};
     const patch = {};
@@ -400,7 +423,23 @@ authRouter.put('/profile', authRequired, captchaGuard, async (req, res, next) =>
     }
     if (typeof avatar_url === 'string') patch.avatar_url = avatar_url.slice(0, 500) || null;
     if (Object.keys(patch).length > 0) {
+      const cfg = await captchaConfig();
+      if (cfg.enabled) {
+        if (req.body?.captcha) {
+          // 携带了验证码则必须有效（错码/失效/服务不可用都拦下）
+          const r = await verifyCaptcha(req.body.captcha);
+          if (!r.ok) return res.status(r.status).json({ error: r.error });
+        } else if (profileEditRisk(req.user.id)) {
+          // 未带码且命中风控 → 要求验证，前端按 CAPTCHA_REQUIRED 按需弹窗
+          return res.status(400).json({ error: '操作过于频繁，请完成安全验证后再保存', code: 'CAPTCHA_REQUIRED' });
+        }
+      }
       await pool.query('UPDATE users SET ? WHERE id = ?', [patch, req.user.id]);
+      const nowTs = Date.now();
+      profileEdits.set(req.user.id, [
+        ...(profileEdits.get(req.user.id) || []).filter((t) => nowTs - t < PROFILE_EDIT_WINDOW),
+        nowTs,
+      ]);
     }
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     res.json({ user: await publicUser(rows[0]) });

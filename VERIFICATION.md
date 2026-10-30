@@ -560,3 +560,14 @@
 - 服务器部署（198.20.0.9，宝塔 PM2 管理）：go-captcha-service v1.0.6 linux-amd64 → `/www/wwwroot/go-captcha-service/`（`config.json` 改 127.0.0.1:9700 仅本机监听、memory cache、CORS 开、600 属主 www——PM2 以 www 用户运行，root 属主会 permission denied 回落默认配置撞 8080 崩溃循环）；`ecosystem.config.js` 修正为 `script './go-captcha-service' + args '-config config.json -gocaptcha-config gocaptcha.json'`（官方模板指向 ./build/ 且用 redis，不匹配）；nginx 增补 vhost `node_go-captcha-service.conf`（listen 81，server_name go-captcha.xiaoziyi.com → proxy_pass 127.0.0.1:9700，SamWaf 443 统一入口转发）。
 - 公网验证：`https://go-captcha.xiaoziyi.com/status/health` → 200 `{"code":200}`；`GET /api/v1/public/get-data?id=click-default-ch` → 200 出图（key + master/thumb base64）；`POST /api/v1/public/check-data` 可达。
 - #lesson：multipart 场景 `req.body.captcha` 是字符串而非对象（express.json 不解析表单字段），verifyCaptcha 必须兼容两种入参——首轮 2 例 FAIL 即栽在这里。
+
+## 57. 验证码体验修复：资料修改弹窗不显示 + 注册免二次验证
+
+- 用户反馈：①修改个人资料无任何反应（验证码未弹出、无提示、保存未发出）；②注册流程要过两次验证码，体验差。
+- 根因（①）：`ConsoleView.vue` / `SpaceView.vue` 的 `<CaptchaDialog>` 误放在条件分支内（ConsoleView 在「我的文章」tab 文章列表行内、SpaceView 在文章列表 `v-if` 分支内），切到资料编辑页时组件未挂载，`profileCaptchaOpen=true` 无效——弹窗不出现、报错无处显示、保存静默失败。修复：两组件的 CaptchaDialog 移到资料表单同级（始终挂载）。
+- 体验改造（②，安全性不降）：
+  - **信用制**：注册与魔法链接登录改为「发邮箱验证码时验一次码 → 提交凭信用免二次验证」。后端 `services/captcha.js` 新增 `grantCaptchaCredit/consumeCaptchaCredit`（key=`ip|email|purpose`，TTL 10 分钟，一次一用）与 `captchaOptionalGuard(purpose, getEmail)`：未启用放行；携带验证码必须验证通过（失败不影响信用）；无码吃信用，无信用 400 `{error:'请完成行为验证', code:'CAPTCHA_REQUIRED'}`。
+  - **前端自动补验**：`web/src/api/http.ts` 新增 `isCaptchaRequired(e)`；`LoginView` 注册提交直接走免验路径，收到 `CAPTCHA_REQUIRED` 时自动弹验证码窗、验证后自动重提交；`ConsoleView`/`SpaceView` 资料保存同款 attempt-first（先直发，被风控拦时提示「检测到频繁修改，请完成安全验证」并弹窗）。
+  - **资料修改风控**：`profile` 端点改为 authRequired + 内联风控——10 分钟窗口内前 2 次修改免验证（`profileEdits` Map 记录时间戳），超出频率要求验证码；带码请求直接验证（通过即放行且计入窗口）。正常用户改资料零打扰。
+- 回归：smoke-captcha **30/0**（新增注册信用制 4 断言、login/code 免二次验证、profile 风控 6 断言；mock key 加时间戳防跨轮与服务端 consumed Map（31min TTL）碰撞）；smoke-auth 19/0、smoke-admin 73/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。
+- #lesson：①`<CaptchaDialog>` 这类弹窗组件必须挂在常驻容器里，放进 `v-if`/`v-else` 分支会随分支卸载，弹窗静默失效；②smoke 脚本 mock 的 key 若按轮内自增，多轮连跑会与服务端防重放缓存（TTL > 测试间隔）碰撞而级联失败——key 拼时间戳；③adminLoginLimiter（10 次/15 分钟/IP）会被反复跑测试耗尽，跑前重启本地 node 清内存限流。

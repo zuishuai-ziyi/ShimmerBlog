@@ -17,4 +17,13 @@ export function errMsg(e: unknown): string {
   return String(e);
 }
 
+// 后端要求行为验证（验证码信用缺失/风控触发）→ 视图据此按需弹出验证码窗
+export function isCaptchaRequired(e: unknown): boolean {
+  if (axios.isAxiosError(e)) {
+    const data = e.response?.data as { code?: string } | undefined;
+    return data?.code === 'CAPTCHA_REQUIRED';
+  }
+  return false;
+}
+
 export default http;
