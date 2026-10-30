@@ -622,3 +622,7 @@
 - 现象：reCAPTCHA 勾选框点击后，Google 图片挑战层不出现（被「安全验证」弹窗遮挡）。根因：CaptchaDialog 用 `showModal()` 打开 → 原生 dialog 进入浏览器顶层（top layer），高于一切 z-index；Google 挑战层是 body 级 iframe（z-index ≈ 2×10⁹），仍被压在弹窗后面。
 - 修复：`web/src/components/CaptchaDialog.vue` 按 provider 分流打开方式——gocaptcha 保持 `showModal()`（点选画布渲染在弹窗内部，无外层弹层，顶层特性继续提供焦点困住）；recaptcha 改 `show()`（非模态、不进顶层）+ `captcha-modal--flat` 自绘全屏遮罩（z-index 99999，远小于挑战层 2e9），卡片视觉抽到 `.captcha-panel` 内层（两模式共用一套模板）；非模态 Esc 不原生关弹窗，手动接管 keydown；close 时清理监听与样式类。
 - 验证：`npm run build` 通过（CaptchaDialog-C5zrQS58.js）；推送后线上 bundle 哈希对齐。
+
+### 61.2 重构：弹窗框架与验证模式解耦
+- 按 61.1 同一设计统一：两种引擎一律 `dialog.show()` 非模态打开 + `.captcha-modal` 自绘全屏遮罩（fixed inset 0、z-index 99999、flex 居中、blur 遮罩），卡片视觉在 `.captcha-panel` 内层；删除按 provider 分流的 showModal()/classList('captcha-modal--flat') 逻辑与死掉的 ::backdrop 规则；Esc 统一走手动 keydown 捕获（打开注册/关闭清理）；模板一套，引擎只决定内容区（gocaptcha Click 组件 vs recaptcha div）。
+- 验证：`npm run build` 通过（CaptchaDialog-Dmfwbhh0.js）；线上 bundle 哈希对齐后收尾。

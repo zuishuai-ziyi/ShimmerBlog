@@ -11,8 +11,9 @@
  *   action 抛验证码类错误（CAPTCHA_FAILED/CAPTCHA_UNAVAILABLE）→ 弹窗内下方小字提示并自动换题/重置，
  *   用户只需重新验证，无需重试整个操作；
  *   其他业务错误（如密码错误）→ 关闭弹窗，由表单层展示错误。
- * 交互：原生 <dialog>——gocaptcha 走 showModal()（顶层、焦点困住）；recaptcha 走 show()（非模态、不进顶层，
- *   页面滚动锁定、点击遮罩空白不关闭（Esc/× 可关闭）。
+ * 交互：统一非模态打开（dialog.show()，不进浏览器顶层）+ 自绘全屏遮罩——弹窗框架与验证模式完全解耦，
+ *   两种引擎同一套开合行为；页面滚动锁定、点击遮罩空白不关闭（Esc/× 可关闭）；
+ *   不用 showModal() 是因为顶层会压过 Google 挑战弹层（z-index ≈ 2e9）导致挑战图被遮挡。
  * 未启用验证码（site.info.captchaEnabled=false）时父组件不会打开本弹窗。
  */
 import { ref, watch, computed, onBeforeUnmount, nextTick } from 'vue';
@@ -182,13 +183,9 @@ watch(
       await nextTick();
       const d = dlgEl.value;
       if (d && !d.open) {
-        if (isRecaptcha.value) {
-          d.show(); // 非模态：不进顶层，否则 Google 挑战弹层（z-index ≈ 2e9）会被顶层弹窗盖住
-          d.classList.add('captcha-modal--flat');
-          window.addEventListener('keydown', onEscKey, true);
-        } else {
-          d.showModal(); // 原生模态：焦点困住 + 置顶层，背景不可交互
-        }
+        // 统一非模态打开：不进顶层（否则 Google 挑战弹层 z≈2e9 被盖），框架与引擎无关
+        d.show();
+        window.addEventListener('keydown', onEscKey, true);
         lockScroll();
       }
       if (isRecaptcha.value) renderRecaptcha();
@@ -203,7 +200,6 @@ watch(
 /** 原生 dialog 的 close 事件（Esc / 程序关闭都会触发） */
 function onDialogClose() {
   window.removeEventListener('keydown', onEscKey, true);
-  dlgEl.value?.classList.remove('captcha-modal--flat');
   restoreScroll();
   resetRecaptcha();
   emit('update:open', false);
@@ -289,29 +285,25 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
 </template>
 
 <style scoped>
+/* 非模态全屏遮罩：show() 不进顶层，自绘遮罩；z-index 远小于 Google 挑战弹层（≈2e9），
+   挑战图才能盖在本弹窗上方 */
 dialog.captcha-modal {
-  margin: auto;
-  padding: 0;
-  border: none;
-  background: transparent;
-  color: var(--text, #e8eef6);
-}
-
-/* recaptcha 非模态模式：show() 不进顶层（否则被压过 Google 挑战弹层 z-index ≈ 2e9），
-   自绘全屏遮罩；z-index 须远小于 2e9，挑战图才能盖在本弹窗上方 */
-dialog.captcha-modal--flat {
   position: fixed;
   inset: 0;
   z-index: 99999;
   width: 100vw;
   height: 100dvh;
   max-width: none;
+  margin: 0;
+  padding: 0;
+  border: none;
   background: rgb(0 0 0 / 45%);
   backdrop-filter: blur(6px);
   -webkit-backdrop-filter: blur(6px);
   display: flex;
   align-items: center;
   justify-content: center;
+  color: var(--text, #e8eef6);
 }
 
 .captcha-panel {
@@ -321,12 +313,6 @@ dialog.captcha-modal--flat {
   background: var(--glass-bg, rgb(16 24 36 / 92%));
   border: 1px solid var(--glass-border, rgb(255 255 255 / 12%));
   box-shadow: 0 24px 60px rgb(0 0 0 / 35%);
-}
-
-dialog.captcha-modal::backdrop {
-  background: rgb(0 0 0 / 45%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
 }
 
 .captcha-head {
