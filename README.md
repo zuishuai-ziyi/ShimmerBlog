@@ -84,7 +84,9 @@ cd ../web && npm run dev
 | `oauth_proxy_url` | 可选。服务器侧访问 GitHub/Google API 走的 HTTP(S) 代理（如 `http://127.0.0.1:7890`），供国内服务器使用第三方登录；留空直连 |
 | `avatar_redirect_hops` / `avatar_timeout_seconds` | 第三方头像下载限制：重定向跟随上限（0–12 跳，默认 12）与总超时（1–300 秒，默认 60），后台「第三方登录」页可改 |
 | `default_name_color` | 默认用户名颜色：用户未自定义名称颜色时全站显示的颜色（后台「用户管理」页可改）；内置默认 `#8cc6e2`（前台强调色 --accent） |
-| `captcha_enabled` / `captcha_api` / `captcha_id` / `captcha_verify_api` | 行为验证码（GoCaptcha）：`captcha_enabled` 开关；`captcha_api` 为 go-captcha-service 公开地址（前端取题用，如 `https://go-captcha.xiaoziyi.com`）；`captcha_id` 取题实例（默认 `click-default-ch`）；`captcha_verify_api` 可选，后端二次校验地址（留空用服务地址；同机部署可填内网 `http://127.0.0.1:9700` 免依赖公网证书） |
+| `captcha_enabled` / `captcha_provider` | 行为验证码开关与服务类型：`captcha_provider` = `gocaptcha`（点选，默认）或 `recaptcha`（Google reCAPTCHA v2 勾选框，后台可切换） |
+| `captcha_api` / `captcha_id` / `captcha_verify_api` | GoCaptcha：`captcha_api` 为 go-captcha-service 公开地址（前端取题用，如 `https://go-captcha.xiaoziyi.com`）；`captcha_id` 取题实例（默认 `click-default-ch`）；`captcha_verify_api` 可选，后端二次校验地址（留空用服务地址；同机部署可填内网 `http://127.0.0.1:9700` 免依赖公网证书） |
+| `recaptcha_site_key` / `recaptcha_secret_key` / `recaptcha_verify_api` | reCAPTCHA v2：`site_key` 前端渲染勾选框；`secret_key` 后端 siteverify 用（后台掩码保存）；`recaptcha_verify_api` 可选校验地址（默认官方国内镜像 `https://recaptcha.net/recaptcha/api/siteverify`，大陆可达） |
 | `web_origin` | 第三方登录回调后跳回的前端地址（生产环境改成你的域名） |
 
 - 后台存的值优先于 `.env`；密钥字段读接口只返回掩码（`__KEEP__` 表示保持原值，`__CLEAR__` 表示清空）。
@@ -101,7 +103,9 @@ cd ../web && npm run dev
 - **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
 - **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub/Google 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
 - **发件人格式**：必须包含邮箱地址，推荐 `名称 <you@domain.com>`；只填名称会被自动包装成 `"名称" <SMTP 账号>`（否则 nodemailer 拿不到地址，信封 Return-Path 为空、无 From 头，外域邮箱会拒收或进垃圾桶，且退信也发不回来）。
-- **行为验证码（GoCaptcha）**：接入独立部署的 [go-captcha-service](https://github.com/wenlng/go-captcha)（点选文字验证码）。后台「站点」页开启并填服务地址后生效；前端弹窗取题（`GET {captcha_api}/api/v1/public/get-data?id={captcha_id}`），后端二次校验（`POST {captcha_verify_api‖captcha_api}/api/v1/public/check-data`）并做进程内一 key 一用防重放（服务端校验成功后 key 并不立刻作废）；验证码服务不可用时 fail-closed（502，不放行）。UI 文案随站点返回的 `captchaEnabled/captchaApi/captchaId` 自动启停，未开启时零打扰。
+- **行为验证码（可切换双引擎）**：后台「行为验证码」页可在 GoCaptcha 与 Google reCAPTCHA v2 之间切换（`captcha_provider`），均做进程内一次一用防重放；验证码服务不可用时 fail-closed（502，不放行）。UI 文案随站点返回的 `captchaEnabled/captchaProvider` 自动启停，未开启时零打扰。
+  - **GoCaptcha 点选**：接入独立部署的 [go-captcha-service](https://github.com/wenlng/go-captcha)。填服务地址后生效；前端弹窗取题（`GET {captcha_api}/api/v1/public/get-data?id={captcha_id}`），后端二次校验（`POST {captcha_verify_api‖captcha_api}/api/v1/public/check-data`）并防重放（服务端校验成功后 key 并不立刻作废）。
+  - **reCAPTCHA v2 勾选框**：前端用官方国内镜像 recaptcha.net 加载组件（大陆可达，暗色主题适配弹窗），勾选通过后 token 随业务请求提交；后端向 siteverify（默认 `https://recaptcha.net/recaptcha/api/siteverify`）POST secret+response 校验，token 一次一用由 Google 保证 + 本端防重放。
   - **强验证端点**（未验证直接拦截）：登录、发送邮箱验证码、发布文章、上传图片、后台登录。
   - **信用制免二次验证**：注册 / 魔法链接登录（`/auth/login/code`）在「发送邮箱验证码」时验证一次，提交时凭信用（10 分钟内一次）免二次验证，不打扰正常用户；无信用且未带验证码返回 `CAPTCHA_REQUIRED`，前端自动弹窗补验后重提交（攻击者仍需一次真实验证 + 邮箱码，安全性不降）。
   - **风控验证**：修改资料（昵称/简介）10 分钟窗口内前 2 次免验证，超出频率要求完成验证码（带码直接验证通过）；携带验证码的请求必须验证通过，失败不影响信用。
@@ -112,7 +116,7 @@ cd ../web && npm run dev
 | 方法 & 路径 | 说明 |
 | --- | --- |
 | `GET /api/health` | 健康检查（含数据库连通性） |
-| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 与 Google 是否可用/行为验证码配置/关于页副标题 aboutSubtitle） |
+| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 与 Google 是否可用/行为验证码配置与类型/关于页副标题 aboutSubtitle） |
 | `POST /api/auth/register` | 邮箱 + 密码 + **邮箱验证码**注册（验证码校验通过即视为邮箱已验证） |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
 | `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送） |
@@ -147,7 +151,7 @@ node scripts/smoke-auth.mjs       # 34 项：注册（含邮箱验证码校验�
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 76 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/第三方登录与出站代理与头像下载限制配置/默认用户名颜色/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）
-node scripts/smoke-captcha.mjs    # 30 项：GoCaptcha 行为验证码（mock 服务：强验证端点拦截/放行、注册与魔法登录信用制免二次验证、错码兑底拦截、资料修改风控窗口、一 key 一用防重放、服务不可用 502 fail-closed、配置还原）
+node scripts/smoke-captcha.mjs    # 39 项：行为验证码双引擎（mock 服务：强验证端点拦截/放行、注册与魔法登录信用制免二次验证、错码兑底拦截、资料修改风控窗口、一 key 一用防重放、服务不可用 502 fail-closed；reCAPTCHA 切换/siteverify/重放/502；配置还原）
 cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 ```
 

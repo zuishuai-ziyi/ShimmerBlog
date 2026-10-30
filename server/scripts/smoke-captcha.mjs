@@ -10,9 +10,10 @@ import { latestCode } from './_test-lib.mjs';
 const BASE = process.env.SB_BASE || 'http://127.0.0.1:3010/api';
 const MOCK_PORT = Number(process.env.SB_CAPTCHA_MOCK_PORT || 9797);
 
-/* ---------- mock go-captcha-service ---------- */
+/* ---------- mock go-captcha-service + reCAPTCHA siteverify ---------- */
 // mode: 'ok'（校验通过）| 'failure'（校验不通过）| 'down'（连接直接断开，模拟服务不可用）
 let mode = 'ok';
+let rcSecret = ''; // reCAPTCHA 段设置；mock 侧校验后端送达的 secret 是否正确
 const mock = http.createServer((req, res) => {
   if (req.method === 'POST' && req.url?.startsWith('/api/v1/public/check-data')) {
     let raw = '';
@@ -29,6 +30,21 @@ const mock = http.createServer((req, res) => {
       const passed = mode === 'ok' && !!body.captchaKey && !!body.value && !!body.id;
       res.writeHead(200, { 'Content-Type': 'application/json' });
       res.end(JSON.stringify({ code: 200, message: '', data: passed ? 'ok' : 'failure' }));
+    });
+    return;
+  }
+  if (req.method === 'POST' && req.url?.startsWith('/recaptcha/siteverify')) {
+    let raw = '';
+    req.on('data', (c) => (raw += c));
+    req.on('end', () => {
+      if (mode === 'down') {
+        req.destroy();
+        return;
+      }
+      const p = new URLSearchParams(raw);
+      const passed = mode === 'ok' && p.get('secret') === rcSecret && !!p.get('response');
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ success: passed, challenge_ts: new Date().toISOString(), hostname: '127.0.0.1' }));
     });
     return;
   }
@@ -85,10 +101,15 @@ const adminToken = adminLogin.data.token;
 const cur = await req('GET', '/admin/settings', { token: adminToken });
 const oldCfg = {
   captcha_enabled: cur.data.settings.captcha_enabled ?? '0',
+  captcha_provider: cur.data.settings.captcha_provider ?? 'gocaptcha',
   captcha_api: cur.data.settings.captcha_api ?? '',
   captcha_verify_api: cur.data.settings.captcha_verify_api ?? '',
   captcha_id: cur.data.settings.captcha_id ?? 'click-default-ch',
+  recaptcha_site_key: cur.data.settings.recaptcha_site_key ?? '',
+  recaptcha_verify_api: cur.data.settings.recaptcha_verify_api ?? '',
 };
+// recaptcha_secret_key 掩码回传（有配置 → __KEEP__）：原本未配置时还原需显式 __CLEAR__ 清掉测试值
+const oldRcSecretSet = cur.data.settings.recaptcha_secret_key === '__KEEP__';
 let r = await req('PUT', '/admin/settings', {
   token: adminToken,
   body: { captcha_enabled: '1', captcha_api: `http://127.0.0.1:${MOCK_PORT}`, captcha_id: 'click-default-ch' },
@@ -210,11 +231,64 @@ r = await req('POST', '/auth/send-code', { body: { email: MAIL, purpose: 'reset'
 ok('验证码服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
 
-/* ---------- 还原 ---------- */
-r = await req('PUT', '/admin/settings', { token: adminToken, body: oldCfg });
-ok('还原配置 200', r.status === 200 && r.data.captchaEnabled === (oldCfg.captcha_enabled === '1' && !!oldCfg.captcha_api));
+/* ---------- reCAPTCHA v2 勾选框（provider 切换 + siteverify mock） ---------- */
+rcSecret = `rc-secret-${Date.now()}`;
+r = await req('PUT', '/admin/settings', {
+  token: adminToken,
+  body: {
+    captcha_provider: 'recaptcha',
+    recaptcha_site_key: 'rc-site-key-test',
+    recaptcha_secret_key: rcSecret,
+    recaptcha_verify_api: `http://127.0.0.1:${MOCK_PORT}/recaptcha/siteverify`,
+  },
+});
+ok('切到 reCAPTCHA 200 且生效', r.status === 200 && r.data.captchaEnabled === true, JSON.stringify(r.data));
 r = await req('GET', '/site');
-ok('还原后 /site captchaEnabled=false', r.data.captchaEnabled === false);
+ok('/site 暴露 captchaProvider/recaptchaSiteKey', r.data.captchaEnabled === true && r.data.captchaProvider === 'recaptcha' && r.data.recaptchaSiteKey === 'rc-site-key-test', JSON.stringify(r.data));
+
+// provider 校验：非法值 400
+r = await req('PUT', '/admin/settings', { token: adminToken, body: { captcha_provider: 'bogus' } });
+ok('非法 provider 400', r.status === 400, JSON.stringify(r.data));
+
+mode = 'ok';
+// 未携带 token → 400 CAPTCHA_REQUIRED（换 MAIL2 账号：loginLimiter 按 ip:email 计数，避免耗尽 MAIL 桶）
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456' } });
+ok('recaptcha login 缺 token 400', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
+
+// 空 token → 400 CAPTCHA_REQUIRED
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456', captcha: { key: '', value: '' } } });
+ok('recaptcha 空 token 400', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
+
+// siteverify 拒绝 → 400 CAPTCHA_FAILED
+mode = 'failure';
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456', captcha: { key: '', value: 'tok-wrong' } } });
+ok('recaptcha 校验失败 400', r.status === 400 && r.data.code === 'CAPTCHA_FAILED', JSON.stringify(r.data));
+
+// 通过 → 穿过验证码层（错误密码 401；mock 已校验 secret 送达正确）
+mode = 'ok';
+const rcTok = `tok-${Date.now()}`;
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'wrong-pass', captcha: { value: rcTok } } });
+ok('recaptcha 通过后到密码校验 401', r.status === 401, JSON.stringify(r.data));
+
+// token 一次一用（防重放，mock success 但服务端已消费）
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456', captcha: { value: rcTok } } });
+ok('recaptcha 同 token 重放 400', r.status === 400 && /已失效/.test(r.data.error || ''), JSON.stringify(r.data));
+
+// 服务不可用 → 502 fail-closed
+mode = 'down';
+r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456', captcha: { value: `tok-down-${Date.now()}` } } });
+ok('recaptcha 服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
+mode = 'ok';
+
+/* ---------- 还原 ---------- */
+r = await req('PUT', '/admin/settings', {
+  token: adminToken,
+  body: { ...oldCfg, recaptcha_secret_key: oldRcSecretSet ? '__KEEP__' : '__CLEAR__' },
+});
+const expectedOn = oldCfg.captcha_enabled === '1' && (oldCfg.captcha_provider === 'recaptcha' ? true : !!oldCfg.captcha_api);
+ok('还原配置 200', r.status === 200 && r.data.captchaEnabled === expectedOn);
+r = await req('GET', '/site');
+ok('还原后 /site 回到原 provider', r.data.captchaProvider === (oldCfg.captcha_provider === 'recaptcha' ? 'recaptcha' : 'gocaptcha') && r.data.captchaEnabled === expectedOn);
 
 console.log(`\n结果：${pass} 通过 / ${fail} 失败`);
 mock.close();

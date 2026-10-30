@@ -178,6 +178,7 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
         github_client_secret: all.github_client_secret ? '__KEEP__' : '',
         google_client_secret: all.google_client_secret ? '__KEEP__' : '',
         smtp_pass: all.smtp_pass ? '__KEEP__' : '',
+        recaptcha_secret_key: all.recaptcha_secret_key ? '__KEEP__' : '',
       },
       // 邮件模板元数据：前端据此渲染每种邮件的编辑器（含占位符提示与内置默认值）
       mailTemplates: Object.values(MAIL_TEMPLATES).map((t) => ({
@@ -203,7 +204,7 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
   try {
     const body = { ...(req.body ?? {}) };
     // 密钥：'__KEEP__' 与空串都表示「不修改」，'__CLEAR__' 才是清空
-    for (const key of ['github_client_secret', 'google_client_secret', 'smtp_pass']) {
+    for (const key of ['github_client_secret', 'google_client_secret', 'smtp_pass', 'recaptcha_secret_key']) {
       if (body[key] === '__KEEP__' || body[key] === '') delete body[key];
       else if (body[key] === '__CLEAR__') body[key] = '';
     }
@@ -217,12 +218,21 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     if (typeof body.smtp_secure === 'boolean') body.smtp_secure = body.smtp_secure ? '1' : '0';
     if (typeof body.captcha_enabled === 'boolean') body.captcha_enabled = body.captcha_enabled ? '1' : '0';
     // 行为验证码：api/verify_api 必须是 http(s) 地址或空；id 非空串
-    for (const key of ['captcha_api', 'captcha_verify_api']) {
+    for (const key of ['captcha_api', 'captcha_verify_api', 'recaptcha_verify_api']) {
       if (body[key] !== undefined) {
         const u = String(body[key] ?? '').trim().replace(/\/+$/, '');
         if (u && !/^https?:\/\//.test(u)) return res.status(400).json({ error: '验证码服务地址必须以 http(s):// 开头' });
         body[key] = u;
       }
+    }
+    // 验证服务类型：gocaptcha（点选）/ recaptcha（v2 勾选框）
+    if (body.captcha_provider !== undefined) {
+      const p = String(body.captcha_provider ?? '').trim();
+      if (!['gocaptcha', 'recaptcha'].includes(p)) return res.status(400).json({ error: '验证码类型仅支持 gocaptcha 或 recaptcha' });
+      body.captcha_provider = p;
+    }
+    if (body.recaptcha_site_key !== undefined) {
+      body.recaptcha_site_key = String(body.recaptcha_site_key ?? '').trim();
     }
     if (body.captcha_id !== undefined) {
       const cid = String(body.captcha_id ?? '').trim();

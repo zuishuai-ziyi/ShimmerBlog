@@ -90,15 +90,32 @@
             </div>
 
             <div class="card">
-              <h2>行为验证码（GoCaptcha）</h2>
+              <h2>行为验证码</h2>
               <p class="hint">
-                启用后，登录、注册、发送邮件验证码、发布文章、上传图片、修改资料与后台登录均需先完成点选验证。
-                需先部署 go-captcha-service 并绑定域名。
+                启用后，登录、注册、发送邮件验证码、发布文章、上传图片、修改资料与后台登录均需先完成验证。
+                支持 GoCaptcha 点选（自建 go-captcha-service）与 Google reCAPTCHA v2 勾选框（官方国内镜像 recaptcha.net，大陆可达）。
               </p>
               <label class="row check"><input type="checkbox" v-model="captchaEnabledBool" /><span>启用行为验证码</span></label>
-              <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://go-captcha.xiaoziyi.com" /></label>
-              <label class="row"><span>实例 ID</span><input v-model.trim="captchaForm.captcha_id" placeholder="click-default-ch" /></label>
-              <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:9700" /></label>
+              <label class="row">
+                <span>验证服务</span>
+                <select v-model="captchaForm.captcha_provider">
+                  <option value="gocaptcha">GoCaptcha 点选（自建服务）</option>
+                  <option value="recaptcha">Google reCAPTCHA v2 勾选框</option>
+                </select>
+              </label>
+              <template v-if="captchaForm.captcha_provider === 'gocaptcha'">
+                <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://go-captcha.xiaoziyi.com" /></label>
+                <label class="row"><span>实例 ID</span><input v-model.trim="captchaForm.captcha_id" placeholder="click-default-ch" /></label>
+                <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:9700" /></label>
+              </template>
+              <template v-else>
+                <label class="row"><span>Site Key</span><input v-model.trim="captchaForm.recaptcha_site_key" placeholder="6Le…" /></label>
+                <label class="row">
+                  <span>Secret Key</span>
+                  <input v-model.trim="captchaForm.recaptcha_secret_key" type="password" :placeholder="rcSecretSet ? '已配置，留空保持不变' : '6Le…'" />
+                </label>
+                <label class="row"><span>校验地址</span><input v-model.trim="captchaForm.recaptcha_verify_api" placeholder="可选，留空用 https://recaptcha.net/recaptcha/api/siteverify" /></label>
+              </template>
               <p class="hint" :class="{ ok: captchaOn }">{{ captchaOn ? '✓ 当前已生效：访客与后台均需完成验证' : '当前未启用' }}</p>
               <div class="ops inline">
                 <button class="primary" :disabled="saving" @click="saveCaptchaSettings">{{ saving ? '保存中…' : '保存验证码设置' }}</button>
@@ -455,10 +472,19 @@ const githubEnabled = ref(false);
 const googleEnabled = ref(false);
 const ghSecretSet = ref(false);
 const ggSecretSet = ref(false);
-// 行为验证码（GoCaptcha）
-const captchaForm = reactive({ captcha_api: '', captcha_verify_api: '', captcha_id: 'click-default-ch' });
+// 行为验证码（GoCaptcha 点选 / reCAPTCHA v2 勾选框，后台可切换）
+const captchaForm = reactive({
+  captcha_provider: 'gocaptcha',
+  captcha_api: '',
+  captcha_verify_api: '',
+  captcha_id: 'click-default-ch',
+  recaptcha_site_key: '',
+  recaptcha_secret_key: '',
+  recaptcha_verify_api: '',
+});
 const captchaEnabledBool = ref(false);
 const captchaOn = ref(false);
+const rcSecretSet = ref(false);
 // 回调地址以站点配置 web_origin 为准（与后端 redirect_uri 同源：本地 http://localhost:5180，线上域名）；装载配置前先展示当前访问地址
 const callbackBase = ref(window.location.origin);
 const ghAppUrl = 'https://github.com/settings/developers';
@@ -527,10 +553,15 @@ async function bootstrap() {
   ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
   if (data.settings.web_origin) callbackBase.value = data.settings.web_origin;
   Object.assign(captchaForm, {
+    captcha_provider: data.settings.captcha_provider === 'recaptcha' ? 'recaptcha' : 'gocaptcha',
     captcha_api: data.settings.captcha_api ?? '',
     captcha_verify_api: data.settings.captcha_verify_api ?? '',
     captcha_id: data.settings.captcha_id ?? 'click-default-ch',
+    recaptcha_site_key: data.settings.recaptcha_site_key ?? '',
+    recaptcha_secret_key: '',
+    recaptcha_verify_api: data.settings.recaptcha_verify_api ?? '',
   });
+  rcSecretSet.value = data.settings.recaptcha_secret_key === '__KEEP__';
   captchaEnabledBool.value = data.settings.captcha_enabled === '1';
   captchaOn.value = !!data.captchaEnabled;
   logoUrl.value = data.settings.site_logo_url ?? '';
@@ -581,9 +612,14 @@ async function saveCaptchaSettings() {
   try {
     const { data } = await adminHttp.put('/admin/settings', {
       captcha_enabled: captchaEnabledBool.value ? '1' : '0',
+      captcha_provider: captchaForm.captcha_provider,
       captcha_api: captchaForm.captcha_api,
       captcha_verify_api: captchaForm.captcha_verify_api,
       captcha_id: captchaForm.captcha_id,
+      recaptcha_site_key: captchaForm.recaptcha_site_key,
+      // 密码框留空 = 不修改（后端 __KEEP__ 语义），避免误清已配置的 Secret
+      recaptcha_secret_key: captchaForm.recaptcha_secret_key || (rcSecretSet.value ? '__KEEP__' : ''),
+      recaptcha_verify_api: captchaForm.recaptcha_verify_api,
     });
     captchaOn.value = !!data.captchaEnabled;
     await refreshSite();

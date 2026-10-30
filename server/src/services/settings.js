@@ -37,12 +37,18 @@ const DEFAULTS = {
   oauth_proxy_url: '',
   web_origin: 'http://localhost:5180',
   register_open: '1',
-  // GoCaptcha 行为验证码：api 为前端取题用的服务公开地址；verify_api 可选（后端二次校验地址，
-  // 同机部署时填内网地址可免依赖公网证书）；id 为取题实例（服务端 gocaptcha.json 里定义）
+  // 行为验证码：provider 选验证服务（gocaptcha 点选 / recaptcha v2 勾选框）；
+  // gocaptcha：api 为前端取题用的服务公开地址，verify_api 可选（后端二次校验地址，同机部署时填内网地址
+  // 可免依赖公网证书），id 为取题实例（服务端 gocaptcha.json 里定义）；
+  // recaptcha：site_key 前端渲染勾选框用，secret_key 后端 siteverify 用，verify_api 可选（默认官方国内镜像 recaptcha.net）
   captcha_enabled: '0',
+  captcha_provider: 'gocaptcha',
   captcha_api: '',
   captcha_verify_api: '',
   captcha_id: 'click-default-ch',
+  recaptcha_site_key: '',
+  recaptcha_secret_key: '',
+  recaptcha_verify_api: '',
   // 第三方头像转存：重定向跟随上限（0–12 跳）与总超时（1–300 秒），后台可改
   avatar_redirect_hops: '12',
   avatar_timeout_seconds: '60',
@@ -111,6 +117,18 @@ export async function webOrigin() {
 /** GoCaptcha 服务公开地址：前端取题用（后台配置，如 https://go-captcha.example.com） */
 export async function captchaApi() {
   return (await getSetting('captcha_api')) || '';
+}
+
+function captchaProviderOf(all) {
+  return all.captcha_provider === 'recaptcha' ? 'recaptcha' : 'gocaptcha';
+}
+
+/** 验证码是否生效：开关打开 + 当前 provider 所需配置齐全 */
+function captchaEnabledOf(all) {
+  if (all.captcha_enabled !== '1') return false;
+  return captchaProviderOf(all) === 'recaptcha'
+    ? !!(all.recaptcha_site_key && all.recaptcha_secret_key)
+    : !!all.captcha_api;
 }
 
 /** OAuth 出站代理：后台配置优先，其次环境变量；空 = 直连（国内服务器访问 GitHub/Google API 时填写） */
@@ -228,8 +246,10 @@ export async function publicSiteInfo() {
     registerOpen: all.register_open === '1',
     githubEnabled: gh.enabled,
     googleEnabled: gg.enabled,
-    captchaEnabled: all.captcha_enabled === '1' && !!all.captcha_api,
+    captchaEnabled: captchaEnabledOf(all),
+    captchaProvider: captchaProviderOf(all),
     captchaApi: all.captcha_api || '',
     captchaId: all.captcha_id || 'click-default-ch',
+    recaptchaSiteKey: captchaProviderOf(all) === 'recaptcha' ? all.recaptcha_site_key || '' : '',
   };
 }

@@ -10,8 +10,10 @@ export interface SiteInfo {
   githubEnabled: boolean;
   googleEnabled: boolean;
   captchaEnabled: boolean;
+  captchaProvider: 'gocaptcha' | 'recaptcha';
   captchaApi: string;
   captchaId: string;
+  recaptchaSiteKey: string;
   logoUrl: string;
   defaultAvatarUrl: string;
   aboutHtml: string;
@@ -28,8 +30,10 @@ export const useSiteStore = defineStore('site', {
       githubEnabled: false,
       googleEnabled: false,
       captchaEnabled: false,
+      captchaProvider: 'gocaptcha',
       captchaApi: '',
       captchaId: 'click-default-ch',
+      recaptchaSiteKey: '',
       logoUrl: '',
       defaultAvatarUrl: '',
       aboutHtml: '',

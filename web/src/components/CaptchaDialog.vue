@@ -1,12 +1,15 @@
 <script setup lang="ts">
 /**
- * GoCaptcha 行为验证弹窗：封装 go-captcha-vue 的 Click 点选组件。
+ * 行为验证弹窗（provider 随 site.info.captchaProvider 切换）：
+ * - gocaptcha：封装 go-captcha-vue 的 Click 点选组件，弹窗内取题点选；
+ * - recaptcha：Google reCAPTCHA v2 勾选框（recaptcha.net 镜像加载，大陆可达），
+ *   勾选通过后自动以 token 调用 action，无需点按钮。
  * 用法：
  *   <CaptchaDialog v-model:open="open" :action="doSave" />
- *   open.value = true 打开弹窗；弹窗内部取题、点选，confirm 后调用 action({key, value})，
+ *   open.value = true 打开弹窗；验证完成后调用 action({key, value})，
  *   action 成功 → 自动关闭；
- *   action 抛验证码类错误（CAPTCHA_FAILED/CAPTCHA_UNAVAILABLE）→ 弹窗内下方小字提示并自动换题，
- *   用户只需重新点选，无需重试整个操作（key 已消费不能复用）；
+ *   action 抛验证码类错误（CAPTCHA_FAILED/CAPTCHA_UNAVAILABLE）→ 弹窗内下方小字提示并自动换题/重置，
+ *   用户只需重新验证，无需重试整个操作；
  *   其他业务错误（如密码错误）→ 关闭弹窗，由表单层展示错误。
  * 交互：原生 <dialog>.showModal()——打开时焦点困在弹窗内（Tab 不会落到背景元素）、
  *   页面滚动锁定、点击遮罩空白不关闭（Esc/× 可关闭）。
@@ -25,6 +28,93 @@ const props = defineProps<{
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>();
 
 const site = useSiteStore();
+
+const isRecaptcha = computed(() => site.info.captchaProvider === 'recaptcha');
+
+/* ---------- reCAPTCHA v2 勾选框（recaptcha.net 镜像，大陆可达） ---------- */
+let grecaptchaPromise: Promise<any> | null = null;
+function loadRecaptcha(): Promise<any> {
+  if (grecaptchaPromise) return grecaptchaPromise;
+  grecaptchaPromise = new Promise((resolve, reject) => {
+    const w = window as any;
+    if (w.grecaptcha?.render) return resolve(w.grecaptcha);
+    (w as any)._rcOnload = () => resolve(w.grecaptcha);
+    const s = document.createElement('script');
+    s.src = 'https://recaptcha.net/recaptcha/api.js?render=explicit&onload=_rcOnload';
+    s.async = true;
+    s.onerror = () => {
+      grecaptchaPromise = null;
+      reject(new Error('script load failed'));
+    };
+    document.head.appendChild(s);
+  });
+  return grecaptchaPromise;
+}
+
+const rcEl = ref<HTMLDivElement | null>(null);
+let rcWidgetId: number | null = null;
+
+async function renderRecaptcha() {
+  error.value = '';
+  loadError.value = '';
+  try {
+    if (!site.info.recaptchaSiteKey) {
+      loadError.value = '未配置 reCAPTCHA Site Key';
+      return;
+    }
+    const g = await loadRecaptcha();
+    if (!rcEl.value) return;
+    if (rcWidgetId !== null) {
+      g.reset(rcWidgetId);
+      return;
+    }
+    rcWidgetId = g.render(rcEl.value, {
+      sitekey: site.info.recaptchaSiteKey,
+      theme: 'dark',
+      callback: onRecaptchaToken,
+      'expired-callback': () => {
+        error.value = '验证已过期，请重新勾选';
+      },
+      'error-callback': () => {
+        error.value = '验证组件加载失败，请重试';
+      },
+    });
+  } catch {
+    loadError.value = '验证码脚本加载失败，请检查网络或稍后再试';
+  }
+}
+
+function resetRecaptcha() {
+  const g = (window as any).grecaptcha;
+  if (g && rcWidgetId !== null) {
+    try {
+      g.reset(rcWidgetId);
+    } catch {
+ /* 组件未就绪时忽略 */
+    }
+  }
+}
+
+/** 勾选通过 → 直接以 token 调 action（与点选确认同一套错误分流） */
+async function onRecaptchaToken(token: string) {
+  if (busy.value) return;
+  error.value = '';
+  busy.value = true;
+  try {
+    await props.action({ key: '', value: String(token || '') });
+    close();
+  } catch (e: any) {
+    if (isCaptchaFailure(e)) {
+      // 验证未通过/失效/服务不可用：重置勾选框再提示，用户重新勾选即可
+      resetRecaptcha();
+      error.value = errMsg(e);
+    } else {
+      close();
+    }
+  } finally {
+    busy.value = false;
+  }
+}
 
 const dlgEl = ref<HTMLDialogElement | null>(null);
 const loading = ref(false);
@@ -52,6 +142,7 @@ async function load() {
   error.value = '';
   loadError.value = '';
   dots.value = [];
+  if (isRecaptcha.value) return;
   if (!site.info.captchaApi) {
     loadError.value = '验证码服务未配置';
     return;
@@ -94,7 +185,8 @@ watch(
         d.showModal(); // 原生模态：焦点困住 + 置顶层，背景不可交互
         lockScroll();
       }
-      load();
+      if (isRecaptcha.value) renderRecaptcha();
+      else load();
     } else {
       const d = dlgEl.value;
       if (d?.open) d.close();
@@ -105,6 +197,7 @@ watch(
 /** 原生 dialog 的 close 事件（Esc / 程序关闭都会触发） */
 function onDialogClose() {
   restoreScroll();
+  resetRecaptcha();
   emit('update:open', false);
 }
 
@@ -156,9 +249,14 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
     </div>
     <p class="captcha-sub">请完成验证以继续</p>
 
-    <div v-if="loadError" class="captcha-error">
+    <div v-if="isRecaptcha" class="captcha-body">
+      <div ref="rcEl" class="recaptcha-box"></div>
+      <p v-if="error" class="captcha-result">{{ error }}</p>
+      <p v-if="busy" class="captcha-busy">正在验证…</p>
+    </div>
+    <div v-else-if="loadError" class="captcha-error">
       <span>{{ loadError }}</span>
-      <button class="captcha-retry" type="button" @click="load">重试</button>
+      <button class="captcha-retry" type="button" @click="isRecaptcha ? renderRecaptcha() : load()">重试</button>
     </div>
     <div v-else class="captcha-body">
       <Click
@@ -226,6 +324,12 @@ dialog.captcha-modal::backdrop {
   display: flex;
   flex-direction: column;
   gap: 8px;
+}
+
+.recaptcha-box {
+  display: flex;
+  justify-content: center;
+  min-height: 78px;
 }
 
 .captcha-error {

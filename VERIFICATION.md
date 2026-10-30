@@ -606,3 +606,14 @@
   - **⑤**：删除 `LoginView.vue` 注册模式提示 `<p class="hint-tip">注册需先验证邮箱：点击发送验证码，10 分钟内有效</p>`。
 - 测试：smoke-auth **34/0**（+6：provider 非法 400 / 未绑定指定来源 400 / 双绑定 provider=google 强制走 Google 分支 502 / 双绑定默认 GitHub 200 且响应带 `provider:'github'` / 来源回填（旧外链 avatar_url）200 + remote_avatar_url 落库；github_id/google_id 唯一约束需先释放再绑给测试用户）；smoke-admin **76/0**（+3：avatar 限制保存回读与跳数钳至 12 / 非整数 400 / 还原默认）；回归 smoke-captcha 30/0、smoke-articles 24/0、`npm run build` 通过。
 - #lesson：①PowerShell 管道 `node -e "…\"…\"…"` 转义会被吃（Expected unicode escape）——一次性 SQL 用临时 .mjs 文件跑（放 server/scripts/ 下才有 node_modules 解析）；②smoke 脚本绑定唯一列（github_id 583231 / mock google sub）前必须先释放旧绑定，多段测试共用同一 mock id 会 ER_DUP_ENTRY 崩在半路留脏数据——崩溃后按邮箱模式清残留再重跑。
+
+## 61. 新增 reCAPTCHA v2 验证支持（后台可切换验证服务）
+
+- 用户要求：新增 reCAPTCHA 验证支持（允许后台切换验证服务），提供 v2 勾选框密钥；为确保大陆连通性使用谷歌官方国内镜像 recaptcha.net。选择上线策略：预置密钥 + 切换启用。
+- 实现：
+  - **后端**：settings 新增 `captcha_provider`（`gocaptcha`/`recaptcha`，默认前者）与 `recaptcha_site_key`/`recaptcha_secret_key`/`recaptcha_verify_api`（校验地址默认 `https://recaptcha.net/recaptcha/api/siteverify`）；`services/captcha.js` `captchaConfig()` 返回 provider 全量配置（recaptcha 生效需 site_key+secret 齐），`verifyCaptcha()` 按 provider 分流——gocaptcha 走原 check-data，recaptcha 取 `payload.value`（兼容 `token` 字段）向 siteverify POST urlencoded `secret+response`（5s 超时、fail-closed 502、进程内已消费集合防重放）；`captchaPayloadPresent` 兼容 `{value}`/`{token}` 形态；`publicSiteInfo` +`captchaProvider`/`recaptchaSiteKey`（enabled 按 provider 判定）；admin.js PUT 校验 provider 白名单、`recaptcha_verify_api` http(s) 校验、`recaptcha_secret_key` 纳入密钥掩码（`__KEEP__`/`__CLEAR__`）。
+  - **前端**：`CaptchaDialog.vue` 双引擎——recaptcha 分支动态加载 `recaptcha.net/recaptcha/api.js?render=explicit`（模块级单次），`grecaptcha.render` 渲染暗色勾选框进同一原生 dialog，勾选通过自动以 `action({key:'', value:token})` 提交；验证类失败 → `grecaptcha.reset()` + 弹窗内下方小字提示，过期/错误回调也提示；关闭弹窗自动 reset。`AdminView.vue` 「行为验证码」卡加服务类型下拉与 recaptcha 字段组（Site Key/Secret 密码框留空保持不变/校验地址），按 provider 显示对应字段。`stores/site.ts` +`captchaProvider`/`recaptchaSiteKey`。
+  - **业务端点零改动**：`captchaGuard`/`captchaOptionalGuard`/信用制/风控窗口对 provider 无感知，两种验证码走同一套拦截与放行逻辑。
+- 测试：smoke-captcha **39/0**（+9：切 provider 生效与 /site 暴露、非法 provider 400、缺/空 token 400、siteverify 拒绝 400、通过后到密码校验 401（mock 校验 secret 送达）、同 token 重放 400、服务不可用 502、还原回原 provider）；smoke-auth 34/0、smoke-admin 76/0、smoke-articles 24/0、`npm run build` 通过（vue-tsc 无错）。
+- 上线：线上 settings 预置 `captcha_provider=recaptcha` + 用户提供的 v2 密钥（site/secret），`captcha_enabled=1`；GoCaptcha 配置原样保留，后台可一键切回。
+- #lesson：①PowerShell `$out -match 'FAIL|Error:'` 大小写不敏感，JSON 里的 `"error":` 会造成假失败——判失败要用 `Select-String '\bFAIL\b'` 或核对「结果：N 通过 / 0 失败」行；②loginLimiter 按 `ip:email` 计数（15min/10 次），smoke 内多次登录验证换不同测试账号分桶，避免 429 污染断言。
