@@ -268,11 +268,11 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
     @close="onDialogClose"
   >
     <div class="captcha-panel">
-    <div class="captcha-head">
+    <div v-if="!inline" class="captcha-head">
       <span id="captcha-dlg-title" class="captcha-title">安全验证</span>
       <button class="captcha-close" type="button" aria-label="关闭" @click="close">×</button>
     </div>
-    <p class="captcha-sub">请完成验证以继续</p>
+    <p v-if="!inline" class="captcha-sub">请完成验证以继续</p>
 
     <div v-if="isRecaptcha" class="captcha-body">
       <div ref="rcEl" class="recaptcha-box"></div>
@@ -322,14 +322,27 @@ dialog.captcha-modal {
 dialog.captcha-modal--inline {
   position: static;
   display: block;
-  width: min(360px, calc(100vw - 32px));
+  width: 100%;
   height: auto;
-  margin: 12px auto 0;
+  margin: 12px 0 0;
   padding: 0;
   background: none;
   backdrop-filter: none;
   -webkit-backdrop-filter: none;
   z-index: auto;
+}
+
+/* 内联下只要验证组件本体：面板去外壳（无深色卡/边框/阴影），组件居中 */
+dialog.captcha-modal--inline .captcha-panel {
+  width: auto;
+  padding: 0;
+  background: none;
+  border: none;
+  box-shadow: none;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 6px;
 }
 
 .captcha-panel {

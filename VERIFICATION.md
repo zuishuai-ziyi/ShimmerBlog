@@ -632,3 +632,7 @@
 - **②**删除管理登录卡片「管理密码与用户账号无关，仅用于本后台。」文案及 .gate-hint 样式。
 - **③后台验证码内联**：CaptchaDialog 新增 `inline` prop——内联模式直接置 `dialog.open` attribute（普通文档流面板：`captcha-modal--inline` 样式 position:static、无遮罩/顶层/Esc/锁滚动），复用同一套模板与双引擎内容；AdminView 登录门 `<CaptchaDialog ... inline />` 移入 gate-card 内表单下方（登录时后端返回 CAPTCHA_REQUIRED 后验证码组件直接展开在登录框下，不再弹独立对话框）。
 - 验证：`npm run build` 通过（AdminView-DuATwKB0.js、CaptchaDialog-BscP1K9h.js）；推送后线上哈希对齐。
+
+### 62.1 后台内联验证码只显示组件本体
+- 反馈：登录框下方显示的是「验证对话框」（标题「安全验证」+ 深色面板外壳），不是验证组件。
+- 修复：inline 模式 v-if 隐藏 .captcha-head（标题+×）与 .captcha-sub（副文案）；`captcha-modal--inline .captcha-panel` 去外壳（无背景/边框/阴影/padding，flex 居中 + gap 6px）；dialog 宽 100% 随宿主卡片。内联下只剩验证组件本体（reCAPTCHA 勾选框或 GoCaptcha 点选图）+ 下方错误/状态小字。
