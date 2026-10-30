@@ -9,6 +9,9 @@ export interface SiteInfo {
   registerOpen: boolean;
   githubEnabled: boolean;
   googleEnabled: boolean;
+  captchaEnabled: boolean;
+  captchaApi: string;
+  captchaId: string;
   logoUrl: string;
   defaultAvatarUrl: string;
   aboutHtml: string;
@@ -24,6 +27,9 @@ export const useSiteStore = defineStore('site', {
       registerOpen: true,
       githubEnabled: false,
       googleEnabled: false,
+      captchaEnabled: false,
+      captchaApi: '',
+      captchaId: 'click-default-ch',
       logoUrl: '',
       defaultAvatarUrl: '',
       aboutHtml: '',

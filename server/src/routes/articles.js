@@ -3,8 +3,9 @@ import jwt from 'jsonwebtoken';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired, adminRequired } from '../middleware/auth.js';
-import { userCanPost } from '../utils.js';
+import { userCanPost, applyDefaultNameColor } from '../utils.js';
 import { imageUpload } from '../uploads.js';
+import { captchaGuard, verifyCaptcha } from '../services/captcha.js';
 
 export const articlesRouter = Router();
 
@@ -21,7 +22,9 @@ async function loadArticle(id) {
      FROM articles a JOIN users u ON a.author_id = u.id WHERE a.id = ? LIMIT 1`,
     [id]
   );
-  return rows[0];
+  const article = rows[0];
+  if (article) await applyDefaultNameColor([article]);
+  return article;
 }
 
 function canEdit(user, article) {
@@ -40,7 +43,7 @@ function validateArticlePayload(body) {
 }
 
 /* ---------- 创建 ---------- */
-articlesRouter.post('/', authRequired, async (req, res, next) => {
+articlesRouter.post('/', authRequired, captchaGuard, async (req, res, next) => {
   try {
     if (!userCanPost(req.user)) return res.status(403).json({ error: '没有写作权限（可在后台申请开通）' });
     const v = validateArticlePayload(req.body);
@@ -122,6 +125,7 @@ articlesRouter.get('/', async (req, res, next) => {
        LIMIT ? OFFSET ?`,
       [pageSize, (page - 1) * pageSize]
     );
+    await applyDefaultNameColor(rows);
     res.json({ items: rows, total, page, pageSize });
   } catch (e) {
     next(e);
@@ -135,6 +139,7 @@ articlesRouter.get('/mine', authRequired, async (req, res, next) => {
       `SELECT ${LIST_FIELDS} ${LIST_JOIN} WHERE a.author_id = ? ORDER BY a.updated_at DESC, a.id DESC`,
       [req.user.id]
     );
+    await applyDefaultNameColor(rows);
     res.json({ items: rows, total: rows.length });
   } catch (e) {
     next(e);
@@ -167,8 +172,11 @@ articlesRouter.get('/:id', async (req, res, next) => {
 
 /* ---------- 正文配图上传（登录用户） ---------- */
 articlesRouter.post('/upload-image', authRequired, (req, res) => {
-  imageUpload.single('file')(req, res, (err) => {
+  imageUpload.single('file')(req, res, async (err) => {
     if (err) return res.status(400).json({ error: err.message || '图片上传失败' });
+    // multipart 表单：captcha 字段为 JSON 字符串，需在 multer 解析后校验（先验证码后文件处理）
+    const v = await verifyCaptcha(req.body?.captcha);
+    if (!v.ok) return res.status(v.status).json({ error: v.error });
     if (!req.file) return res.status(400).json({ error: '未收到图片文件' });
     res.json({ url: `/uploads/images/${req.file.filename}` });
   });

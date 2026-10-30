@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
+import { defaultNameColor } from './services/settings.js';
 
 export function signToken(user) {
   return jwt.sign({ uid: user.id }, config.jwtSecret, { expiresIn: '7d' });
@@ -10,13 +11,14 @@ export function signAdminToken() {
   return jwt.sign({ admin: true }, config.jwtSecret + ':admin', { expiresIn: '12h' });
 }
 
-export function publicUser(u) {
+export async function publicUser(u) {
   if (!u) return null;
   return {
     id: u.id,
     email: u.email,
     name: u.name,
-    name_color: u.name_color || null,
+    // 未自定义时返回站点默认色（后台可配），前端无需再判断空值
+    name_color: u.name_color || (await defaultNameColor()),
     avatar_url: u.avatar_url,
     bio: u.bio || '',
     status: u.status,
@@ -24,6 +26,14 @@ export function publicUser(u) {
     email_verified: !!u.email_verified,
     created_at: u.created_at,
   };
+}
+
+/** 批量填充列表中 author_name_color 为空的行（用户未自定义 → 站点默认色） */
+export async function applyDefaultNameColor(rows, key = 'author_name_color') {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const def = await defaultNameColor();
+  for (const r of rows) if (r && !r[key]) r[key] = def;
+  return rows;
 }
 
 /** 权限：permissions 为 NULL 时默认拥有全部基础权限（['post']），否则按配置数组 */

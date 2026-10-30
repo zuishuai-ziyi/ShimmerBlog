@@ -1,5 +1,6 @@
 import { Router } from 'express';
 import { pool } from '../db.js';
+import { defaultNameColor } from '../services/settings.js';
 
 export const spaceRouter = Router();
 
@@ -33,7 +34,7 @@ spaceRouter.get('/:id', async (req, res, next) => {
       user: {
         id: user.id,
         name: user.name,
-        name_color: user.name_color || null,
+        name_color: user.name_color || (await defaultNameColor()),
         avatar_url: user.avatar_url,
         bio: user.bio || '',
         created_at: user.created_at,

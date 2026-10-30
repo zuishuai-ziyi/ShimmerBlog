@@ -2,10 +2,11 @@ import { Router } from 'express';
 import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
-import { signAdminToken } from '../utils.js';
+import { signAdminToken, applyDefaultNameColor } from '../utils.js';
 import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES } from '../services/settings.js';
 import { sendTestEmail } from '../services/mailer.js';
 import { makeLimiter } from '../utils.js';
+import { captchaGuard, captchaConfig } from '../services/captcha.js';
 import { imageUpload } from '../uploads.js';
 
 export const adminRouter = Router();
@@ -29,7 +30,7 @@ async function adminPasswordHash() {
   return rows[0]?.value ?? '';
 }
 
-adminRouter.post('/login', adminLoginLimiter, async (req, res, next) => {
+adminRouter.post('/login', adminLoginLimiter, captchaGuard, async (req, res, next) => {
   try {
     const password = String(req.body?.password ?? '');
     const hash = await adminPasswordHash();
@@ -214,11 +215,32 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     // 布尔开关统一存 '1' / '0'
     if (typeof body.register_open === 'boolean') body.register_open = body.register_open ? '1' : '0';
     if (typeof body.smtp_secure === 'boolean') body.smtp_secure = body.smtp_secure ? '1' : '0';
+    if (typeof body.captcha_enabled === 'boolean') body.captcha_enabled = body.captcha_enabled ? '1' : '0';
+    // 行为验证码：api/verify_api 必须是 http(s) 地址或空；id 非空串
+    for (const key of ['captcha_api', 'captcha_verify_api']) {
+      if (body[key] !== undefined) {
+        const u = String(body[key] ?? '').trim().replace(/\/+$/, '');
+        if (u && !/^https?:\/\//.test(u)) return res.status(400).json({ error: '验证码服务地址必须以 http(s):// 开头' });
+        body[key] = u;
+      }
+    }
+    if (body.captcha_id !== undefined) {
+      const cid = String(body.captcha_id ?? '').trim();
+      if (!cid) return res.status(400).json({ error: '验证码实例 ID 不能为空' });
+      body.captcha_id = cid;
+    }
+    // 默认用户名颜色：格式校验（空 = 恢复内置默认）
+    if (body.default_name_color !== undefined) {
+      const c = String(body.default_name_color ?? '').trim();
+      if (c && !NAME_COLOR_RE.test(c)) return res.status(400).json({ error: '颜色格式不正确' });
+      body.default_name_color = c ? (c.startsWith('#') ? c : `#${c}`) : '';
+    }
     const r = await setSettings(body);
     const gh = await githubConfig();
     const gg = await googleConfig();
     const smtp = await smtpConfig();
-    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp });
+    const cap = await captchaConfig();
+    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp, captchaEnabled: cap.enabled });
   } catch (e) {
     next(e);
   }
@@ -293,6 +315,7 @@ adminRouter.get('/articles', adminRequired, async (req, res, next) => {
        LIMIT ? OFFSET ?`,
       [...args, pageSize, (page - 1) * pageSize]
     );
+    await applyDefaultNameColor(rows);
     res.json({ items: rows, total, page, pageSize });
   } catch (e) {
     next(e);

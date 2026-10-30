@@ -48,7 +48,8 @@
         <p class="item-summary">{{ a.summary || '（暂无摘要）' }}</p>
         <p class="item-date">{{ fmtDate(a.published_at || a.created_at) }}</p>
       </router-link>
-    </div>
+      <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
+</div>
     <p v-else class="empty">还没有公开的文章。</p>
     </template>
   </div>
@@ -60,6 +61,7 @@ import { useRoute } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import CaptchaDialog from '../components/CaptchaDialog.vue';
 import bundledAvatar from '../assets/default-avatar.svg';
 
 // 用户默认头像：后台可设置，未设置时用内置图
@@ -121,12 +123,26 @@ function openEdit() {
 }
 
 async function saveProfile() {
+  // 启用行为验证码时先弹窗（后端 PUT /auth/profile 有 captchaGuard）
+  if (site.info.captchaEnabled) {
+    profileCaptchaOpen.value = true;
+    return;
+  }
+  await doSaveProfile();
+}
+
+const profileCaptchaOpen = ref(false);
+const doSaveProfileWithCaptcha = async (c: { key: string; value: string }) => {
+  await doSaveProfile(c);
+};
+
+async function doSaveProfile(captcha?: { key: string; value: string }) {
   saving.value = true;
   editMsg.value = '';
   try {
     const { data } = await http.put<{ user: { name: string; name_color: string | null; bio: string | null } }>(
       '/auth/profile',
-      { name: draft.name, bio: draft.bio }
+      { name: draft.name, bio: draft.bio, captcha }
     );
     if (user.value) {
       user.value.name = data.user.name;

@@ -526,3 +526,37 @@
 - 根因：作者名自定义颜色在文章页（`ArticleView.vue`）、顶栏（`TopBar.vue`）、空间页（`SpaceView.vue`）、后台均已应用，但主页时间线用的 `ArticleCard.vue` 模板只渲染 `{{ article.author_name }}`，没绑定 `author_name_color`——列表接口（`server/src/routes/articles.js` 列表 SELECT）其实一直返回该字段，纯属前端漏绑。
 - 修复：`web/src/components/ArticleCard.vue` 作者名 span 加 `:style="article.author_name_color ? { color: article.author_name_color } : undefined"`（与文章页同款写法）。`ArticleBrief` 类型本就含该字段，无类型/后端改动。
 - 影响：主页时间线与归档页（`TimelineList.vue` 复用 ArticleCard）同步生效。`npm run build` 通过；本地 `/api/articles` 实测列表项含 `author_name_color` 字段。
+
+## 55. 默认用户名颜色可配置（= 前端实际显示色）
+
+- 用户要求：默认用户名颜色不设置为白色，而是前端实际显示的颜色；并允许后台设置用户默认颜色。
+- 现状核实：卡片与文章页作者名实际显示 `var(--accent)` = `rgb(140 198 226)` = `#8cc6e2`（淡蓝），顶栏/空间页显示白色——「默认=白」与主要展示位不符。
+- 实现（后端填充策略，前端渲染点零改动）：
+  - `server/src/services/settings.js`：`DEFAULTS` + `default_name_color: '#8cc6e2'`，新增 `defaultNameColor()`（空值回退 `#8cc6e2`）。
+  - `server/src/utils.js`：`publicUser` 改 async（`name_color: u.name_color || (await defaultNameColor())`）；新增 `applyDefaultNameColor(rows, key)` 批量填充列表空值。
+  - `server/src/routes/auth.js`：7 处 `publicUser(...)` 补 `await`（`/me` 同步处理器改 async）。
+  - `server/src/routes/articles.js`：`loadArticle` + 公开列表 + 我的文章 3 处填充 `author_name_color`；`server/src/routes/space.js` 空间资料填充 `name_color`；`server/src/routes/admin.js` 后台文章列表填充（后台用户列表保持原始值以区分「默认」）。
+  - `server/src/routes/admin.js` PUT `/admin/settings`：`default_name_color` 格式校验（复用 `NAME_COLOR_RE`，无 `#` 自动补，空串=恢复内置默认）。
+  - `web/src/views/AdminView.vue`：「用户管理」页新增「默认用户名颜色」设置行（取色器 + 保存，走 `saveSettings(['default_name_color'])`）；用户列表取色器对未自定义用户显示默认色、标签显示 `默认 #8cc6e2`；`setColor` 改为「与默认色相同 → 存 null（跟随默认）」（原为硬编码 `#ffffff`）。
+- 回归：smoke-admin **73/0**（+12：保存回读/非法值 400/无#补#/注册响应回填/详情回填/空间资料回填/自定义色优先/删文删用户清理/还原）、smoke-auth 19/0、smoke-articles 24/0、e2e-mail-tpl 20/0、`npm run build` 通过。
+- 排障记录：首轮 edit 调用中 `articles.js` 的 import+`loadArticle` 修改随同批另一条失败条目整批被拒，导致运行时 `applyDefaultNameColor is not defined`（`GET /articles` 500、测试详情回填 null）——补齐后全绿。#lesson：同文件多条 edit 原子生效，失败必须核对实际落盘内容。
+
+## 56. 接入 GoCaptcha 行为验证码
+
+- 用户要求：接入 [GoCaptcha](https://github.com/wenlng/go-captcha)（独立 go-captcha-service 项目，跑在应用同机、宝塔管理、域名 `go-captcha.xiaoziyi.com`）；保护登录、注册、发送重置密码邮件、发布文章、后台登录、上传图片、修改昵称及简介等高频操作。
+- 架构：服务端独立部署（HTTP API，不进本仓库）；应用内配置三个键指向它——前端取题走 `captcha_api`（公网域名），后端二次校验走 `captcha_verify_api`（可选，同机可填内网地址）；`GET /api/site` 暴露 `captchaEnabled/captchaApi/captchaId`，前端未开启时零打扰。
+- 后端：
+  - 新增 `server/src/services/captcha.js`：`captchaConfig()`（enabled = 开关 + api 齐全）、`verifyCaptcha(payload)`（缺参 400「请完成行为验证」→ 进程内已消费集合拦截重放 400「验证已失效」→ `POST {base}/api/v1/public/check-data`（5s 超时）非 ok 400「验证未通过」→ 网络错误 **502 fail-closed**「验证码服务暂不可用」；成功即消费 key）、`captchaGuard` 中间件；payload 兼容对象（JSON 请求体）与 JSON 字符串（multipart 表单字段）。
+  - `server/src/services/settings.js`：`DEFAULTS` + `captcha_enabled('0')/captcha_api('')/captcha_verify_api('')/captcha_id('click-default-ch')`；`publicSiteInfo` + `captchaEnabled/captchaApi/captchaId`。
+  - 挂 `captchaGuard`：`auth.js` register / login（loginLimiter 后）/ login/code / send-code（codeLimiter 后）/ profile 共 5 处；`admin.js` POST /admin/login（adminLoginLimiter 后）；`articles.js` POST /（发文章）；`articles.js` POST /upload-image 为 multipart，在 multer 回调内先 `verifyCaptcha(req.body.captcha)` 再处理文件（字段为 JSON 串）。
+  - `admin.js` PUT /admin/settings：`captcha_enabled` 布尔归一、`captcha_api/captcha_verify_api` http(s) 前缀校验（去尾斜杠）、`captcha_id` 非空校验；响应 + `captchaEnabled`。
+  - 安全设计：go-captcha-service 的 check-data 成功后 key 保留至缓存 TTL（30 分钟）不删除，重放恒 ok——后端进程内消费集合（TTL 31 分钟定期清扫）保证一 key 一用。
+- 前端：
+  - 新依赖 `go-captcha-vue@^2.0.7`；新增 `web/src/components/CaptchaDialog.vue`：官方 Click 点选组件 + 站点同款 glass 风格弹窗，`v-model:open` + `action({key,value})`；confirm 时把点选坐标拼 `"x,y,..."` 提交，action 抛错则在弹窗内展示并自动换题（key 已消费）。
+  - 接线 5 个视图：`LoginView.vue`（登录/注册提交 + 发送邮箱验证码，重置密码提交本身不保护）、`AdminView.vue`（后台登录门）、`ArticleEditor.vue`（仅新建文章 + 上传图片，编辑已有文章不打扰）、`ConsoleView.vue` / `SpaceView.vue`(修改昵称/简介)。全部「未启用 → 直接执行；启用 → 先弹窗验证再执行」。
+  - `web/src/stores/site.ts` SiteInfo + 3 字段；AdminView「站点」页新增「行为验证码（GoCaptcha）」卡片（开关/服务地址/实例 ID/内部校验地址 + 独立保存按钮与生效状态提示）。
+- 测试：新增 `server/scripts/smoke-captcha.mjs`（内置 mock go-captcha-service 127.0.0.1:9797，可切 ok/failure/down 三态）：**22/0**——/site 暴露字段、send-code/register 带 valid 码走通、login 缺码 400 / 错码 400 / 对码穿到密码层 401 / 一 key 重放 400、admin login 拦截与穿透、profile、发文章、上传图片（multipart 字符串入参）、服务不可用 502、配置还原。
+- 回归：smoke-captcha **22/0**、smoke-auth 19/0、smoke-admin 73/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。
+- 服务器部署（198.20.0.9，宝塔 PM2 管理）：go-captcha-service v1.0.6 linux-amd64 → `/www/wwwroot/go-captcha-service/`（`config.json` 改 127.0.0.1:9700 仅本机监听、memory cache、CORS 开、600 属主 www——PM2 以 www 用户运行，root 属主会 permission denied 回落默认配置撞 8080 崩溃循环）；`ecosystem.config.js` 修正为 `script './go-captcha-service' + args '-config config.json -gocaptcha-config gocaptcha.json'`（官方模板指向 ./build/ 且用 redis，不匹配）；nginx 增补 vhost `node_go-captcha-service.conf`（listen 81，server_name go-captcha.xiaoziyi.com → proxy_pass 127.0.0.1:9700，SamWaf 443 统一入口转发）。
+- 公网验证：`https://go-captcha.xiaoziyi.com/status/health` → 200 `{"code":200}`；`GET /api/v1/public/get-data?id=click-default-ch` → 200 出图（key + master/thumb base64）；`POST /api/v1/public/check-data` 可达。
+- #lesson：multipart 场景 `req.body.captcha` 是字符串而非对象（express.json 不解析表单字段），verifyCaptcha 必须兼容两种入参——首轮 2 例 FAIL 即栽在这里。

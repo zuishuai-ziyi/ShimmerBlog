@@ -119,6 +119,7 @@
         </a>
       </div>
     </div>
+    <CaptchaDialog v-model:open="captchaOpen" :title="captchaTitle" :action="captchaAction" />
   </div>
 </template>
 
@@ -128,6 +129,7 @@ import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import CaptchaDialog from '../components/CaptchaDialog.vue';
 
 const router = useRouter();
 const route = useRoute();
@@ -162,7 +164,34 @@ function switchMode(m: 'login' | 'register' | 'forgot') {
   if (m === 'forgot' || m === 'register') form.code = '';
 }
 
+type Captcha = { key: string; value: string };
+
+/** 行为验证（GoCaptcha）：启用时先弹窗，验证通过后再真正提交 */
+const captchaOpen = ref(false);
+type CaptchaKind = 'submit' | 'sendCode';
+const captchaPending = ref<CaptchaKind>('submit');
+const needCaptcha = computed(() => site.info.captchaEnabled);
+const captchaTitle = computed(() => (captchaPending.value === 'sendCode' ? '发送验证码前请先验证' : '安全验证'));
+
+/** 返回 true = 未启用验证直接执行；false = 已打开弹窗，由 captchaAction 接管 */
+function requestCaptcha(kind: CaptchaKind): boolean {
+  if (!needCaptcha.value) return true;
+  captchaPending.value = kind;
+  captchaOpen.value = true;
+  return false;
+}
+
+const captchaAction = async (c: Captcha) => {
+  if (captchaPending.value === 'sendCode') await doSendCode(c);
+  else await doSubmit(c);
+};
+
 async function submit() {
+  if (loading.value) return;
+  if (requestCaptcha('submit')) await doSubmit();
+}
+
+async function doSubmit(captcha?: Captcha) {
   if (loading.value) return;
   loading.value = true;
   error.value = '';
@@ -174,12 +203,13 @@ async function submit() {
         password: form.password,
         name: form.name || undefined,
         code: form.code,
+        captcha,
       });
       await auth.setToken(data.token);
       router.replace(redirect.value);
       return;
     }
-    const { data } = await http.post('/auth/login', { email: form.email, password: form.password });
+    const { data } = await http.post('/auth/login', { email: form.email, password: form.password, captcha });
     await auth.setToken(data.token);
     router.replace(redirect.value);
   } catch (e) {
@@ -195,12 +225,16 @@ async function sendCode() {
     error.value = '请先填写邮箱';
     return;
   }
+  if (requestCaptcha('sendCode')) await doSendCode();
+}
+
+async function doSendCode(captcha?: Captcha) {
   sending.value = true;
   error.value = '';
   notice.value = '';
   try {
     const purpose = mode.value === 'register' ? 'register' : 'reset';
-    const { data } = await http.post('/auth/send-code', { email: form.email, purpose });
+    const { data } = await http.post('/auth/send-code', { email: form.email, purpose, captcha });
     notice.value = '验证码已发送，10 分钟内有效';
     devCode.value = data.devCode || '';
     counting.value = true;

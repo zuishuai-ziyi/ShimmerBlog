@@ -198,6 +198,37 @@ async function main() {
   await req('PUT', '/admin/settings', { token: adminToken, body: { about_subtitle: beforeSub } });
   check('关于页副标题已还原测试前原值', (await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.about_subtitle === beforeSub);
 
+  // ---------- 默认用户名颜色（default_name_color）：保存回读 / 格式校验 / 公开接口回填 ----------
+  console.log('\n== 默认用户名颜色 ==');
+  const beforeDefColor = (await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.default_name_color ?? '';
+  await req('PUT', '/admin/settings', { token: adminToken, body: { default_name_color: '#ff8800' } });
+  check('default_name_color 保存并回读', ((await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.default_name_color) === '#ff8800');
+  check('default_name_color 非法值 400', (await req('PUT', '/admin/settings', { token: adminToken, body: { default_name_color: 'zzz##' } })).status === 400);
+  await req('PUT', '/admin/settings', { token: adminToken, body: { default_name_color: 'aabbcc' } });
+  check('default_name_color 无#自动补#', ((await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.default_name_color) === '#aabbcc');
+  await req('PUT', '/admin/settings', { token: adminToken, body: { default_name_color: '#ff8800' } });
+  // 未自定义颜色的用户：注册响应 / 公开文章列表 / 空间资料都应回填默认色
+  const dcReg = await registerUser(BASE, { email: `dc${rnd()}@test.local`, password: 'secret123', name: '默认色用户' });
+  check('默认色测试用户注册 201', dcReg.status === 201, JSON.stringify(dcReg.data));
+  const dcToken = dcReg.data?.token;
+  const dcId = dcReg.data?.user?.id;
+  check('注册响应 name_color 回填默认色', dcReg.data?.user?.name_color === '#ff8800', String(dcReg.data?.user?.name_color));
+  const dcArt = await req('POST', '/articles', { token: dcToken, body: { title: '默认色验证文章', summary: '', content: '默认色验证正文', status: 'published' } });
+  check('默认色用户发文 201', dcArt.status === 201, JSON.stringify(dcArt.data));
+  const dcItemId = dcArt.data?.article?.id;
+  const dcItem = (await req('GET', `/articles/${dcItemId}`)).data?.article;
+  check('文章详情回填默认名字色', !!dcItem && dcItem.author_name_color === '#ff8800', JSON.stringify(dcItem && [dcItem.author_name, dcItem.author_name_color]));
+  check('空间资料回填默认名字色', (await req('GET', `/space/${dcId}`)).data?.user?.name_color === '#ff8800');
+  // 设置自定义色后优先后端默认色
+  await req('PATCH', `/admin/users/${dcId}`, { token: adminToken, body: { name_color: '#123456' } });
+  const dcItem2 = (await req('GET', `/articles/${dcItemId}`)).data?.article;
+  check('自定义色优先后端默认色', dcItem2?.author_name_color === '#123456', String(dcItem2?.author_name_color));
+  // 清理：删文章、删用户、还原默认色
+  check('默认色用户删文 200', (await req('DELETE', `/articles/${dcItemId}`, { token: dcToken })).data?.ok === true);
+  check('默认色测试用户删除 200', (await req('DELETE', `/admin/users/${dcId}`, { token: adminToken })).data?.ok === true);
+  await req('PUT', '/admin/settings', { token: adminToken, body: { default_name_color: beforeDefColor } });
+  check('default_name_color 已还原', ((await req('GET', '/admin/settings', { token: adminToken })).data?.settings?.default_name_color) === (beforeDefColor || ''));
+
   console.log('\n== 注册开关 ==');
   const closeReg = await req('PUT', '/admin/settings', { token: adminToken, body: { register_open: false } });
   check('关闭注册 200', closeReg.status === 200);

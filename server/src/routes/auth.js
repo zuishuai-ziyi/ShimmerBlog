@@ -6,6 +6,7 @@ import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
 import { sendCodeEmail, sendWelcomeEmail } from '../services/mailer.js';
+import { captchaGuard } from '../services/captcha.js';
 import { githubConfig, googleConfig, oauthProxy, webOrigin, getSetting } from '../services/settings.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
@@ -66,7 +67,7 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
 }
 
 /* ---------- 注册（邮箱 + 密码） ---------- */
-authRouter.post('/register', async (req, res, next) => {
+authRouter.post('/register', captchaGuard, async (req, res, next) => {
   try {
     const { email, password, name, code } = req.body ?? {};
     if ((await getSetting('register_open')) !== '1') {
@@ -98,7 +99,7 @@ authRouter.post('/register', async (req, res, next) => {
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     sendWelcomeEmail(rows[0]).catch(() => {}); // 欢迎邮件：异步发送，不阻塞注册
-    res.status(201).json({ token: signToken(rows[0]), user: publicUser(rows[0]) });
+    res.status(201).json({ token: signToken(rows[0]), user: await publicUser(rows[0]) });
   } catch (e) {
     next(e);
   }
@@ -112,7 +113,7 @@ const loginLimiter = makeLimiter({
   message: '登录尝试过于频繁，请 15 分钟后再试',
 });
 
-authRouter.post('/login', loginLimiter, async (req, res, next) => {
+authRouter.post('/login', loginLimiter, captchaGuard, async (req, res, next) => {
   try {
     const { email, password } = req.body ?? {};
     const [rows] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
@@ -121,7 +122,7 @@ authRouter.post('/login', loginLimiter, async (req, res, next) => {
     const ok = await bcrypt.compare(String(password ?? ''), user.password_hash);
     if (!ok) return res.status(401).json({ error: '邮箱或密码错误' });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
-    res.json({ token: signToken(user), user: publicUser(user) });
+    res.json({ token: signToken(user), user: await publicUser(user) });
   } catch (e) {
     next(e);
   }
@@ -135,7 +136,7 @@ const codeLimiter = makeLimiter({
   message: '验证码发送过于频繁，每小时最多 5 次',
 });
 
-authRouter.post('/send-code', codeLimiter, async (req, res, next) => {
+authRouter.post('/send-code', codeLimiter, captchaGuard, async (req, res, next) => {
   try {
     const { email } = req.body ?? {};
     const rawPurpose = req.body?.purpose;
@@ -169,7 +170,7 @@ authRouter.post('/send-code', codeLimiter, async (req, res, next) => {
   }
 });
 
-authRouter.post('/login/code', async (req, res, next) => {
+authRouter.post('/login/code', captchaGuard, async (req, res, next) => {
   try {
     const { email, code } = req.body ?? {};
     const mail = String(email ?? '').toLowerCase();
@@ -201,7 +202,7 @@ authRouter.post('/login/code', async (req, res, next) => {
       return res.status(403).json({ error: '账号已被禁用' });
     }
     if (!user.email_verified) await pool.query('UPDATE users SET email_verified = 1 WHERE id = ?', [user.id]);
-    res.json({ token: signToken(user), user: publicUser(user) });
+    res.json({ token: signToken(user), user: await publicUser(user) });
   } catch (e) {
     next(e);
   }
@@ -377,11 +378,11 @@ authRouter.get('/google/callback', async (req, res) => {
 });
 
 /* ---------- 当前用户 / 资料 / 头像 ---------- */
-authRouter.get('/me', authRequired, (req, res) => {
-  res.json({ user: publicUser(req.user) });
+authRouter.get('/me', authRequired, async (req, res) => {
+  res.json({ user: await publicUser(req.user) });
 });
 
-authRouter.put('/profile', authRequired, async (req, res, next) => {
+authRouter.put('/profile', authRequired, captchaGuard, async (req, res, next) => {
   try {
     const { name, bio, avatar_url } = req.body ?? {};
     const patch = {};
@@ -402,7 +403,7 @@ authRouter.put('/profile', authRequired, async (req, res, next) => {
       await pool.query('UPDATE users SET ? WHERE id = ?', [patch, req.user.id]);
     }
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    res.json({ user: publicUser(rows[0]) });
+    res.json({ user: await publicUser(rows[0]) });
   } catch (e) {
     next(e);
   }
@@ -415,6 +416,6 @@ authRouter.post('/avatar', authRequired, (req, res) => {
     const url = `/uploads/avatars/${req.file.filename}`;
     await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [url, req.user.id]);
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    res.json({ user: publicUser(rows[0]), url });
+    res.json({ user: await publicUser(rows[0]), url });
   });
 });

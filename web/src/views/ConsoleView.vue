@@ -49,7 +49,8 @@
             <div class="row-actions">
               <button class="link-btn" @click="startEdit(a.id)">编辑</button>
               <button class="link-btn danger" @click="remove(a)">删除</button>
-            </div>
+              <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
+</div>
           </li>
         </ul>
       </template>
@@ -96,6 +97,7 @@ import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import CaptchaDialog from '../components/CaptchaDialog.vue';
 import { formatDateTime } from '../utils/format';
 import type { ArticleBrief } from '../types';
 import bundledAvatar from '../assets/default-avatar.svg';
@@ -181,11 +183,25 @@ watch(
 );
 
 async function saveProfile() {
+  // 启用行为验证码时先弹窗（后端 PUT /auth/profile 有 captchaGuard）
+  if (site.info.captchaEnabled) {
+    profileCaptchaOpen.value = true;
+    return;
+  }
+  await doSaveProfile();
+}
+
+const profileCaptchaOpen = ref(false);
+const doSaveProfileWithCaptcha = async (c: { key: string; value: string }) => {
+  await doSaveProfile(c);
+};
+
+async function doSaveProfile(captcha?: { key: string; value: string }) {
   savingProfile.value = true;
   profileError.value = '';
   profileNotice.value = '';
   try {
-    const { data } = await http.put('/auth/profile', { name: profileName.value, bio: profileBio.value });
+    const { data } = await http.put('/auth/profile', { name: profileName.value, bio: profileBio.value, captcha });
     if (data.user) auth.user = data.user;
     profileNotice.value = '已保存';
   } catch (e) {

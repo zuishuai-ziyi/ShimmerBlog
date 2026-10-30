@@ -11,8 +11,8 @@ export const useAdminStore = defineStore('admin', {
     authed: (s) => !!s.token,
   },
   actions: {
-    async login(password: string) {
-      const { data } = await adminHttp.post<{ token: string }>('/admin/login', { password });
+    async login(password: string, captcha?: { key: string; value: string }) {
+      const { data } = await adminHttp.post<{ token: string }>('/admin/login', { password, captcha });
       this.token = data.token;
       localStorage.setItem('sb_admin_token', data.token);
       this.checked = true;

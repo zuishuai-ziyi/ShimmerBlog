@@ -45,6 +45,7 @@
       />
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div v-else class="prose preview-box" v-html="previewHtml" />
+      <CaptchaDialog v-model:open="captchaOpen" :title="captchaPending === 'upload' ? '上传图片前请先验证' : '发布文章验证'" :action="captchaAction" />
     </div>
 
     <p v-if="error" class="error-tip">{{ error }}</p>
@@ -58,6 +59,8 @@ import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import http, { errMsg } from '../api/http';
 import type { Article } from '../types';
+import { useSiteStore } from '../stores/site';
+import CaptchaDialog from './CaptchaDialog.vue';
 
 const props = defineProps<{ articleId?: number }>();
 const emit = defineEmits<{ (e: 'saved'): void; (e: 'cancel'): void }>();
@@ -74,6 +77,27 @@ const form = reactive({ title: '', summary: '', content: '' });
 const previewHtml = computed(() =>
   DOMPurify.sanitize(marked.parse(form.content || '', { breaks: true, async: false }) as string)
 );
+
+/* ---- 行为验证（GoCaptcha）：仅新建文章与上传图片需要（后端只保护这两个接口） ---- */
+const site = useSiteStore();
+type Captcha = { key: string; value: string };
+const captchaOpen = ref(false);
+type CaptchaKind = 'save' | 'upload';
+const captchaPending = ref<CaptchaKind>('save');
+const captchaStatus = ref<'draft' | 'published'>('published');
+const captchaFile = ref<File | null>(null);
+
+function requestCaptcha(kind: CaptchaKind): boolean {
+  if (!site.info.captchaEnabled) return true;
+  captchaPending.value = kind;
+  captchaOpen.value = true;
+  return false;
+}
+
+const captchaAction = async (c: Captcha) => {
+  if (captchaPending.value === 'save') await doSave(captchaStatus.value, c);
+  else if (captchaFile.value) await doUpload(captchaFile.value, c);
+};
 
 onMounted(async () => {
   if (!props.articleId) return;
@@ -96,11 +120,17 @@ async function save(status: 'draft' | 'published') {
     error.value = '正文不能为空';
     return;
   }
+  captchaStatus.value = status;
+  if (isNew.value && requestCaptcha('save')) await doSave(status);
+  else if (!isNew.value) await doSave(status);
+}
+
+async function doSave(status: 'draft' | 'published', captcha?: Captcha) {
   saving.value = true;
   error.value = '';
   notice.value = '';
   try {
-    const payload = { ...form, status };
+    const payload = { ...form, status, captcha };
     if (isNew.value) {
       const { data } = await http.post<{ article: Article }>('/articles', payload);
       notice.value = '已创建';
@@ -126,11 +156,20 @@ async function onUpload(ev: Event) {
   const file = input.files?.[0];
   input.value = '';
   if (!file) return;
+  if (requestCaptcha('upload')) {
+    await doUpload(file);
+  } else {
+    captchaFile.value = file;
+  }
+}
+
+async function doUpload(file: File, captcha?: Captcha) {
   uploading.value = true;
   error.value = '';
   try {
     const fd = new FormData();
     fd.append('file', file);
+    if (captcha) fd.append('captcha', JSON.stringify(captcha));
     const { data } = await http.post<{ url: string }>('/articles/upload-image', fd, {
       headers: { 'Content-Type': 'multipart/form-data' },
     });
@@ -140,6 +179,7 @@ async function onUpload(ev: Event) {
     error.value = errMsg(e);
   } finally {
     uploading.value = false;
+    captchaFile.value = null;
   }
 }
 

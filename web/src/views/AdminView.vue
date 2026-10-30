@@ -23,6 +23,7 @@
           </div>
       </div>
       <SiteFooter tone="light" />
+      <CaptchaDialog v-model:open="gateCaptchaOpen" title="后台登录验证" :action="doLoginWithCaptcha" />
     </div>
 
     <!-- ======== 后台主体 ======== -->
@@ -86,6 +87,22 @@
               <h2>关于页面内容（HTML）</h2>
               <p class="hint">留空则显示内置介绍。仅允许文本、链接、图片、标题、列表等安全标签。</p>
               <textarea v-model="siteForm.about_html" class="ta mono" rows="10" spellcheck="false" />
+            </div>
+
+            <div class="card">
+              <h2>行为验证码（GoCaptcha）</h2>
+              <p class="hint">
+                启用后，登录、注册、发送邮件验证码、发布文章、上传图片、修改资料与后台登录均需先完成点选验证。
+                需先部署 go-captcha-service 并绑定域名。
+              </p>
+              <label class="row check"><input type="checkbox" v-model="captchaEnabledBool" /><span>启用行为验证码</span></label>
+              <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://go-captcha.xiaoziyi.com" /></label>
+              <label class="row"><span>实例 ID</span><input v-model.trim="captchaForm.captcha_id" placeholder="click-default-ch" /></label>
+              <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:9700" /></label>
+              <p class="hint" :class="{ ok: captchaOn }">{{ captchaOn ? '✓ 当前已生效：访客与后台均需完成验证' : '当前未启用' }}</p>
+              <div class="ops inline">
+                <button class="primary" :disabled="saving" @click="saveCaptchaSettings">{{ saving ? '保存中…' : '保存验证码设置' }}</button>
+              </div>
             </div>
 
             <div class="ops">
@@ -205,6 +222,12 @@
                 <h2>用户管理 <small>{{ userTotal }} 人</small></h2>
                 <input v-model.trim="userQuery" class="search" placeholder="搜索邮箱 / 昵称…" @input="searchUsers" />
               </div>
+              <div class="default-color">
+                <span class="dim">默认用户名颜色（未自定义时显示）</span>
+                <input type="color" v-model="siteForm.default_name_color" />
+                <code class="dim">{{ siteForm.default_name_color }}</code>
+                <button class="ghost sm" :disabled="saving" @click="saveSettings(['default_name_color'])">保存</button>
+              </div>
               <div class="tbl-wrap">
                 <table class="tbl">
                   <thead>
@@ -224,8 +247,8 @@
                       </td>
                       <td>
                         <div class="color-cell">
-                          <input type="color" :value="toHex6(u.name_color)" @input="setColor(u, $event)" />
-                          <code class="dim">{{ u.name_color || '默认' }}</code>
+                          <input type="color" :value="toHex6(u.name_color || siteForm.default_name_color)" @input="setColor(u, $event)" />
+                          <code class="dim">{{ u.name_color || ('默认 ' + siteForm.default_name_color) }}</code>
                         </div>
                       </td>
                       <td>
@@ -324,7 +347,9 @@
 import { onMounted, reactive, ref } from 'vue';
 import adminHttp, { errMsg } from '../api/adminHttp';
 import { useAdminStore } from '../stores/admin';
+import { useSiteStore } from '../stores/site';
 import SiteFooter from '../components/SiteFooter.vue';
+import CaptchaDialog from '../components/CaptchaDialog.vue';
 import defaultAvatar from '../assets/default-avatar.svg';
 
 const admin = useAdminStore();
@@ -338,13 +363,23 @@ const tab = ref<Tab>('site');
 const password = ref('');
 const busy = ref(false);
 const gateError = ref('');
+const site = useSiteStore();
+const gateCaptchaOpen = ref(false);
+const gateCaptchaArg = ref<{ key: string; value: string } | undefined>(undefined);
+
+if (!site.loaded) site.fetch();
 
 async function doLogin() {
   if (!password.value) return;
+  // 启用行为验证码时先弹窗验证，验证通过后带 captcha 提交
+  if (site.info.captchaEnabled && !gateCaptchaArg.value) {
+    gateCaptchaOpen.value = true;
+    return;
+  }
   busy.value = true;
   gateError.value = '';
   try {
-    await admin.login(password.value);
+    await admin.login(password.value, gateCaptchaArg.value);
     password.value = '';
     await bootstrap();
     await Promise.all([loadUsers(), loadArticles()]);
@@ -352,6 +387,17 @@ async function doLogin() {
     gateError.value = errMsg(e);
   } finally {
     busy.value = false;
+    gateCaptchaArg.value = undefined;
+  }
+}
+
+async function doLoginWithCaptcha(c: { key: string; value: string }) {
+  gateCaptchaArg.value = c;
+  try {
+    await doLogin();
+  } finally {
+    // 成功时 doLogin 已把 arg 清空；失败时也清空以便下次重新弹窗
+    gateCaptchaArg.value = undefined;
   }
 }
 
@@ -394,12 +440,16 @@ function showFlash(msg: string) {
   flashTimer = setTimeout(() => (flash.value = ''), 2600);
 }
 
-const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '' });
+const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '', default_name_color: '' });
 const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '' });
 const githubEnabled = ref(false);
 const googleEnabled = ref(false);
 const ghSecretSet = ref(false);
 const ggSecretSet = ref(false);
+// 行为验证码（GoCaptcha）
+const captchaForm = reactive({ captcha_api: '', captcha_verify_api: '', captcha_id: 'click-default-ch' });
+const captchaEnabledBool = ref(false);
+const captchaOn = ref(false);
 // 回调地址以站点配置 web_origin 为准（与后端 redirect_uri 同源：本地 http://localhost:5180，线上域名）；装载配置前先展示当前访问地址
 const callbackBase = ref(window.location.origin);
 const ghAppUrl = 'https://github.com/settings/developers';
@@ -435,6 +485,7 @@ async function bootstrap() {
     site_description: data.settings.site_description ?? '',
     about_subtitle: data.settings.about_subtitle ?? '',
     about_html: data.settings.about_html ?? '',
+    default_name_color: data.settings.default_name_color ?? '',
   });
   mailTemplates.value = data.mailTemplates ?? [];
   for (const t of mailTemplates.value) {
@@ -464,6 +515,13 @@ async function bootstrap() {
   ghSecretSet.value = data.settings.github_client_secret === '__KEEP__';
   ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
   if (data.settings.web_origin) callbackBase.value = data.settings.web_origin;
+  Object.assign(captchaForm, {
+    captcha_api: data.settings.captcha_api ?? '',
+    captcha_verify_api: data.settings.captcha_verify_api ?? '',
+    captcha_id: data.settings.captcha_id ?? 'click-default-ch',
+  });
+  captchaEnabledBool.value = data.settings.captcha_enabled === '1';
+  captchaOn.value = !!data.captchaEnabled;
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
   settingsReady.value = true;
@@ -501,6 +559,29 @@ async function saveMailSettings() {
 
 async function saveOauthSettings() {
   await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url']);
+}
+
+async function saveCaptchaSettings() {
+  if (!settingsReady.value) {
+    showFlash('配置尚未加载完成，请刷新页面后再保存');
+    return;
+  }
+  saving.value = true;
+  try {
+    const { data } = await adminHttp.put('/admin/settings', {
+      captcha_enabled: captchaEnabledBool.value ? '1' : '0',
+      captcha_api: captchaForm.captcha_api,
+      captcha_verify_api: captchaForm.captcha_verify_api,
+      captcha_id: captchaForm.captcha_id,
+    });
+    captchaOn.value = !!data.captchaEnabled;
+    await refreshSite();
+    showFlash('✓ 已保存');
+  } catch (e) {
+    showFlash('保存失败：' + errMsg(e));
+  } finally {
+    saving.value = false;
+  }
 }
 
 /* ---- 邮件模板编辑：占位符插入 / 恢复默认 ---- */
@@ -668,7 +749,8 @@ async function patchUser(u: AdminUser, body: Record<string, unknown>) {
 
 function setColor(u: AdminUser, e: Event) {
   const v = (e.target as HTMLInputElement).value;
-  patchUser(u, { name_color: v === '#ffffff' ? null : v });
+  // 选中的颜色与站点默认色相同 → 视为「跟随默认」存 null
+  patchUser(u, { name_color: toHex6(v) === toHex6(siteForm.default_name_color) ? null : v });
 }
 
 function hasPerm(u: AdminUser, key: string): boolean {
@@ -1204,6 +1286,10 @@ onMounted(async () => {
   margin-top: 22px;
 }
 
+.ops.inline {
+  margin-top: 6px;
+}
+
 .primary {
   padding: 10px 24px;
   border: 0;
@@ -1392,6 +1478,23 @@ onMounted(async () => {
   justify-content: space-between;
   gap: 16px;
   margin-bottom: 14px;
+}
+
+.default-color {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin: -4px 0 14px;
+}
+
+.default-color input[type='color'] {
+  width: 34px;
+  height: 26px;
+  padding: 0;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: none;
+  cursor: pointer;
 }
 
 .list-head h2 {

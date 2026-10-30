@@ -14,6 +14,8 @@ const DEFAULTS = {
   site_description: '微光博客 —— 一个会发光的个人博客角落。',
   site_logo_url: '',
   default_avatar_url: '',
+  // 用户未自定义名称颜色时的默认色：取前端实际显示的强调色 --accent rgb(140 198 226)
+  default_name_color: '#8cc6e2',
   about_html: '',
   about_subtitle: '一个会发光的角落',
   mail_code_subject: '',
@@ -35,6 +37,12 @@ const DEFAULTS = {
   oauth_proxy_url: '',
   web_origin: 'http://localhost:5180',
   register_open: '1',
+  // GoCaptcha 行为验证码：api 为前端取题用的服务公开地址；verify_api 可选（后端二次校验地址，
+  // 同机部署时填内网地址可免依赖公网证书）；id 为取题实例（服务端 gocaptcha.json 里定义）
+  captcha_enabled: '0',
+  captcha_api: '',
+  captcha_verify_api: '',
+  captcha_id: 'click-default-ch',
 };
 
 export function invalidateSettings() {
@@ -88,8 +96,18 @@ export async function googleConfig() {
   return { clientId: id, clientSecret: secret, enabled: !!(id && secret) };
 }
 
+/** 默认用户名颜色：用户未自定义 name_color 时前端显示的颜色（后台「用户管理」可改；空值回退 #8cc6e2） */
+export async function defaultNameColor() {
+  return (await getSetting('default_name_color')) || '#8cc6e2';
+}
+
 export async function webOrigin() {
   return (await getSetting('web_origin')) || process.env.WEB_ORIGIN || 'http://localhost:5180';
+}
+
+/** GoCaptcha 服务公开地址：前端取题用（后台配置，如 https://go-captcha.example.com） */
+export async function captchaApi() {
+  return (await getSetting('captcha_api')) || '';
 }
 
 /** OAuth 出站代理：后台配置优先，其次环境变量；空 = 直连（国内服务器访问 GitHub/Google API 时填写） */
@@ -195,5 +213,8 @@ export async function publicSiteInfo() {
     registerOpen: all.register_open === '1',
     githubEnabled: gh.enabled,
     googleEnabled: gg.enabled,
+    captchaEnabled: all.captcha_enabled === '1' && !!all.captcha_api,
+    captchaApi: all.captcha_api || '',
+    captchaId: all.captcha_id || 'click-default-ch',
   };
 }
