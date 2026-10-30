@@ -571,3 +571,14 @@
   - **资料修改风控**：`profile` 端点改为 authRequired + 内联风控——10 分钟窗口内前 2 次修改免验证（`profileEdits` Map 记录时间戳），超出频率要求验证码；带码请求直接验证（通过即放行且计入窗口）。正常用户改资料零打扰。
 - 回归：smoke-captcha **30/0**（新增注册信用制 4 断言、login/code 免二次验证、profile 风控 6 断言；mock key 加时间戳防跨轮与服务端 consumed Map（31min TTL）碰撞）；smoke-auth 19/0、smoke-admin 73/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。
 - #lesson：①`<CaptchaDialog>` 这类弹窗组件必须挂在常驻容器里，放进 `v-if`/`v-else` 分支会随分支卸载，弹窗静默失效；②smoke 脚本 mock 的 key 若按轮内自增，多轮连跑会与服务端防重放缓存（TTL > 测试间隔）碰撞而级联失败——key 拼时间戳；③adminLoginLimiter（10 次/15 分钟/IP）会被反复跑测试耗尽，跑前重启本地 node 清内存限流。
+
+## 58. 验证码弹窗体验优化（原生 dialog / 弹窗内结果 / 风控静默弹窗）
+
+- 用户要求：①风控触发时不要显示「检测到频繁修改，请完成安全验证」，直接弹验证码窗；②弹窗提示文本改「请完成验证以继续」、标题统一「安全验证」；③弹窗打开时背景元素不可被 Tab 选中、页面不可滚动（建议用浏览器原生弹窗标识）；④点击空白区域不退出；⑤验证结果显示在弹窗内（下方小字），未通过直接刷新换题而非重试整个操作。
+- 实现：
+  - `web/src/components/CaptchaDialog.vue` 重构为原生 `<dialog>` + `showModal()`：焦点自动困在弹窗内（Tab 不会落到背景元素，浏览器 top layer）、页面滚动锁定（html overflow hidden，关闭恢复）、点击遮罩空白不关闭（无 backdrop 点击处理器；Esc/× 可关，`@close` 同步 `update:open`）；标题固定「安全验证」、副文案「请完成验证以继续」，移除 `title` prop。
+  - 后端 `services/captcha.js` 错误响应统一带 `code`：缺参 `CAPTCHA_REQUIRED`、错码/失效 `CAPTCHA_FAILED`、服务不可用 `CAPTCHA_UNAVAILABLE`（captchaGuard 与 captchaOptionalGuard 携带验证码分支同步透出；code 仅为前端分流用的 UI 元数据，无安全语义变化）。
+  - `web/src/api/http.ts` +`isCaptchaFailure(e)`（CAPTCHA_FAILED / CAPTCHA_UNAVAILABLE）；`CaptchaDialog.onConfirm` 捕获 action 抛错分流——验证码类错误：弹窗内下方小字提示 + reset + 自动换题（用户只重新点选）；其他业务错误（如密码错误）：关闭弹窗由表单层展示，避免误导。
+  - 五视图接线同步：移除各自 `title`；`ConsoleView`/`SpaceView` 风控分支删除提示文案（静默直接弹窗）；`LoginView`/`AdminView`/`ArticleEditor` 业务 catch 增加 `isCaptchaFailure → return`（弹窗已处理，表单层不再重复显示错误）。
+- 安全性：验证判定全部仍在服务端（verifyCaptcha → check-data + 一 key 一用）；code 字段仅用于前端分流，不参与任何放行判定；换题重验仍走完整服务端校验。
+- 测试：smoke-captcha **30/0**（错验证码断言追加 `code==='CAPTCHA_FAILED'`）；回归 smoke-auth 19/0、smoke-admin 73/0、smoke-articles 24/0、cleanup 无残留、`npm run build` 通过（CaptchaDialog-Cqf_ov1b.js + 独立 CSS chunk）。

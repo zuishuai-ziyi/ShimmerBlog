@@ -50,8 +50,8 @@ export async function verifyCaptcha(payload) {
 
   const key = String(payload?.key ?? '');
   const value = String(payload?.value ?? '');
-  if (!key || !value) return { ok: false, status: 400, error: '请完成行为验证' };
-  if (consumed.has(key)) return { ok: false, status: 400, error: '验证已失效，请重新验证' };
+  if (!key || !value) return { ok: false, status: 400, error: '请完成行为验证', code: 'CAPTCHA_REQUIRED' };
+  if (consumed.has(key)) return { ok: false, status: 400, error: '验证已失效，请重新验证', code: 'CAPTCHA_FAILED' };
 
   const base = (await getSetting('captcha_verify_api')) || cfg.api;
   try {
@@ -67,16 +67,16 @@ export async function verifyCaptcha(payload) {
       consumed.set(key, Date.now());
       return { ok: true };
     }
-    return { ok: false, status: 400, error: '验证未通过，请重新验证' };
+    return { ok: false, status: 400, error: '验证未通过，请重新验证', code: 'CAPTCHA_FAILED' };
   } catch {
-    return { ok: false, status: 502, error: '验证码服务暂不可用，请稍后再试' };
+    return { ok: false, status: 502, error: '验证码服务暂不可用，请稍后再试', code: 'CAPTCHA_UNAVAILABLE' };
   }
 }
 
 /** Express 中间件：校验 req.body.captcha，失败直接 4xx/5xx */
 export function captchaGuard(req, res, next) {
   verifyCaptcha(req.body?.captcha)
-    .then((r) => (r.ok ? next() : res.status(r.status).json({ error: r.error })))
+    .then((r) => (r.ok ? next() : res.status(r.status).json({ error: r.error, code: r.code })))
     .catch(next);
 }
 
@@ -134,7 +134,7 @@ export function captchaOptionalGuard(purpose, getEmail) {
       .then((r) => {
         if (r.ok) return next();
         if (captchaPayloadPresent(req.body?.captcha)) {
-          return res.status(r.status).json({ error: r.error });
+          return res.status(r.status).json({ error: r.error, code: r.code });
         }
         const email = String(getEmail?.(req) ?? '').trim();
         if (email && consumeCaptchaCredit(req.ip, email, purpose)) return next();

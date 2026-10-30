@@ -52,7 +52,7 @@
     <p v-else class="empty">还没有公开的文章。</p>
 
     <!-- 验证码弹窗：放在用户区块内、列表分支外，保证编辑资料时始终已挂载 -->
-    <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
+    <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
     </template>
   </div>
 </template>
@@ -60,7 +60,7 @@
 <script setup lang="ts">
 import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute } from 'vue-router';
-import http, { errMsg, isCaptchaRequired } from '../api/http';
+import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -152,12 +152,15 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
     editMsg.value = '✓ 已保存';
     setTimeout(() => (editing.value = false), 800);
   } catch (e) {
-    editOk.value = false;
     if (isCaptchaRequired(e)) {
-      editMsg.value = '检测到频繁修改，请完成安全验证';
+      // 风控触发：不打扰文案，直接弹验证窗（验证通过后自动重试）
+      editOk.value = false;
+      editMsg.value = '';
       profileCaptchaOpen.value = true;
       return;
     }
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
+    editOk.value = false;
     editMsg.value = errMsg(e);
   } finally {
     saving.value = false;

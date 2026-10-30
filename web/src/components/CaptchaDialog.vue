@@ -2,25 +2,31 @@
 /**
  * GoCaptcha 行为验证弹窗：封装 go-captcha-vue 的 Click 点选组件。
  * 用法：
- *   <CaptchaDialog v-model:open="open" title="发布文章" :action="doSave" />
+ *   <CaptchaDialog v-model:open="open" :action="doSave" />
  *   open.value = true 打开弹窗；弹窗内部取题、点选，confirm 后调用 action({key, value})，
- *   action 成功 → 自动关闭；action 抛错 → 弹窗内展示错误并自动换题（key 已消费不能复用）。
- * 未启用验证码（site.info.captchaEnabled=false）时直接执行 action，不弹窗。
+ *   action 成功 → 自动关闭；
+ *   action 抛验证码类错误（CAPTCHA_FAILED/CAPTCHA_UNAVAILABLE）→ 弹窗内下方小字提示并自动换题，
+ *   用户只需重新点选，无需重试整个操作（key 已消费不能复用）；
+ *   其他业务错误（如密码错误）→ 关闭弹窗，由表单层展示错误。
+ * 交互：原生 <dialog>.showModal()——打开时焦点困在弹窗内（Tab 不会落到背景元素）、
+ *   页面滚动锁定、点击遮罩空白不关闭（Esc/× 可关闭）。
+ * 未启用验证码（site.info.captchaEnabled=false）时父组件不会打开本弹窗。
  */
-import { ref, watch, computed } from 'vue';
+import { ref, watch, computed, onBeforeUnmount, nextTick } from 'vue';
 import { Click } from 'go-captcha-vue';
 import 'go-captcha-vue/dist/style.css';
 import { useSiteStore } from '../stores/site';
+import { errMsg, isCaptchaFailure } from '../api/http';
 
 const props = defineProps<{
   open: boolean;
-  title?: string;
   action: (captcha: { key: string; value: string }) => Promise<void>;
 }>();
 const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>();
 
 const site = useSiteStore();
 
+const dlgEl = ref<HTMLDialogElement | null>(null);
 const loading = ref(false);
 const busy = ref(false);
 const error = ref('');
@@ -70,12 +76,39 @@ async function load() {
   }
 }
 
+function lockScroll() {
+  document.documentElement.style.overflow = 'hidden';
+}
+
+function restoreScroll() {
+  document.documentElement.style.overflow = '';
+}
+
 watch(
   () => props.open,
-  (v) => {
-    if (v) load();
+  async (v) => {
+    if (v) {
+      await nextTick();
+      const d = dlgEl.value;
+      if (d && !d.open) {
+        d.showModal(); // 原生模态：焦点困住 + 置顶层，背景不可交互
+        lockScroll();
+      }
+      load();
+    } else {
+      const d = dlgEl.value;
+      if (d?.open) d.close();
+    }
   }
 );
+
+/** 原生 dialog 的 close 事件（Esc / 程序关闭都会触发） */
+function onDialogClose() {
+  restoreScroll();
+  emit('update:open', false);
+}
+
+onBeforeUnmount(restoreScroll);
 
 function close() {
   emit('update:open', false);
@@ -99,10 +132,15 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
     await props.action({ key: captchaKey.value, value });
     close();
   } catch (e: any) {
-    // key 已在后端消费/失败，必须换题重试
-    error.value = e?.message || '操作失败，请重试';
-    reset();
-    await refresh();
+    if (isCaptchaFailure(e)) {
+      // 验证码未通过/失效/服务不可用：弹窗内下方小字提示并自动换题，直接重新点选即可
+      error.value = errMsg(e);
+      reset();
+      await refresh();
+    } else {
+      // 业务错误（如密码错误、昵称占用）：关闭弹窗，由表单层展示，避免误导为验证码问题
+      close();
+    }
   } finally {
     busy.value = false;
   }
@@ -110,54 +148,45 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
 </script>
 
 <template>
-  <Teleport to="body">
-    <div v-if="open" class="captcha-overlay" @click.self="close">
-      <div class="captcha-modal" role="dialog" aria-modal="true" :aria-label="title || '安全验证'">
-        <div class="captcha-head">
-          <span class="captcha-title">{{ title || '安全验证' }}</span>
-          <button class="captcha-close" type="button" aria-label="关闭" @click="close">×</button>
-        </div>
-        <p class="captcha-sub">完成下方验证后将继续操作</p>
-
-        <div v-if="loadError" class="captcha-error">
-          <span>{{ loadError }}</span>
-          <button class="captcha-retry" type="button" @click="load">重试</button>
-        </div>
-        <div v-else class="captcha-body">
-          <Click
-            :config="config"
-            :data="{ image, thumb }"
-            :events="{ refresh, close, confirm: onConfirm }"
-          />
-          <p v-if="error" class="captcha-error">{{ error }}</p>
-          <p v-if="busy" class="captcha-busy">正在验证…</p>
-        </div>
-      </div>
+  <dialog ref="dlgEl" class="captcha-modal" aria-labelledby="captcha-dlg-title" @close="onDialogClose">
+    <div class="captcha-head">
+      <span id="captcha-dlg-title" class="captcha-title">安全验证</span>
+      <button class="captcha-close" type="button" aria-label="关闭" @click="close">×</button>
     </div>
-  </Teleport>
+    <p class="captcha-sub">请完成验证以继续</p>
+
+    <div v-if="loadError" class="captcha-error">
+      <span>{{ loadError }}</span>
+      <button class="captcha-retry" type="button" @click="load">重试</button>
+    </div>
+    <div v-else class="captcha-body">
+      <Click
+        :config="config"
+        :data="{ image, thumb }"
+        :events="{ refresh, close, confirm: onConfirm }"
+      />
+      <p v-if="error" class="captcha-result">{{ error }}</p>
+      <p v-if="busy" class="captcha-busy">正在验证…</p>
+    </div>
+  </dialog>
 </template>
 
 <style scoped>
-.captcha-overlay {
-  position: fixed;
-  inset: 0;
-  z-index: 2000;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  background: rgb(0 0 0 / 45%);
-  backdrop-filter: blur(6px);
-  -webkit-backdrop-filter: blur(6px);
-}
-
-.captcha-modal {
+dialog.captcha-modal {
+  margin: auto;
   width: min(360px, calc(100vw - 32px));
   padding: 18px 18px 16px;
-  border-radius: var(--radius-lg, 16px);
-  background: var(--glass-bg, rgb(16 24 36 / 88%));
+  border-radius: 16px;
+  background: var(--glass-bg, rgb(16 24 36 / 92%));
   border: 1px solid var(--glass-border, rgb(255 255 255 / 12%));
   box-shadow: 0 24px 60px rgb(0 0 0 / 35%);
   color: var(--text, #e8eef6);
+}
+
+dialog.captcha-modal::backdrop {
+  background: rgb(0 0 0 / 45%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
 }
 
 .captcha-head {
@@ -205,6 +234,14 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+/* 验证结果：弹窗内下方小字 */
+.captcha-result {
+  margin: 0;
+  font-size: 12px;
+  color: #ff9d9d;
+  opacity: 0.9;
 }
 
 .captcha-retry {

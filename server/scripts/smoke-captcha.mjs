@@ -126,7 +126,7 @@ ok('测试用户 token 就绪', !!token);
 mode = 'failure';
 const MAIL3 = `cap3-${Date.now()}@shimmer.dev`;
 r = await req('POST', '/auth/register', { body: { email: MAIL3, password: 'pass123456', name: 'x3', code: '123456', captcha: good() } });
-ok('注册错验证码 400', r.status === 400 && /验证未通过/.test(r.data.error || ''), JSON.stringify(r.data));
+ok('注册错验证码 400', r.status === 400 && r.data.code === 'CAPTCHA_FAILED' && /验证未通过/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
 
 /* ---------- 各保护端点 ---------- */

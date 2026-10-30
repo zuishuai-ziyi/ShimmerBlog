@@ -119,14 +119,14 @@
         </a>
       </div>
     </div>
-    <CaptchaDialog v-model:open="captchaOpen" :title="captchaTitle" :action="captchaAction" />
+    <CaptchaDialog v-model:open="captchaOpen" :action="captchaAction" />
   </div>
 </template>
 
 <script setup lang="ts">
 import { computed, onBeforeUnmount, reactive, ref } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import http, { errMsg, isCaptchaRequired } from '../api/http';
+import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -171,7 +171,6 @@ const captchaOpen = ref(false);
 type CaptchaKind = 'submit' | 'sendCode';
 const captchaPending = ref<CaptchaKind>('submit');
 const needCaptcha = computed(() => site.info.captchaEnabled);
-const captchaTitle = computed(() => (captchaPending.value === 'sendCode' ? '发送验证码前请先验证' : '安全验证'));
 
 /** 返回 true = 未启用验证直接执行；false = 已打开弹窗，由 captchaAction 接管 */
 function requestCaptcha(kind: CaptchaKind): boolean {
@@ -223,6 +222,7 @@ async function doSubmit(captcha?: Captcha) {
       requestCaptcha('submit');
       return;
     }
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     error.value = errMsg(e);
   } finally {
     loading.value = false;
@@ -259,6 +259,7 @@ async function doSendCode(captcha?: Captcha) {
       }
     }, 1000);
   } catch (e) {
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     error.value = errMsg(e);
   } finally {
     sending.value = false;

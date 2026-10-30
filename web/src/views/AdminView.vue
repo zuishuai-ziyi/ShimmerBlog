@@ -23,7 +23,7 @@
           </div>
       </div>
       <SiteFooter tone="light" />
-      <CaptchaDialog v-model:open="gateCaptchaOpen" title="后台登录验证" :action="doLoginWithCaptcha" />
+      <CaptchaDialog v-model:open="gateCaptchaOpen" :action="doLoginWithCaptcha" />
     </div>
 
     <!-- ======== 后台主体 ======== -->
@@ -346,6 +346,7 @@
 <script setup lang="ts">
 import { onMounted, reactive, ref } from 'vue';
 import adminHttp, { errMsg } from '../api/adminHttp';
+import { isCaptchaFailure } from '../api/http';
 import { useAdminStore } from '../stores/admin';
 import { useSiteStore } from '../stores/site';
 import SiteFooter from '../components/SiteFooter.vue';
@@ -384,6 +385,7 @@ async function doLogin() {
     await bootstrap();
     await Promise.all([loadUsers(), loadArticles()]);
   } catch (e) {
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     gateError.value = errMsg(e);
   } finally {
     busy.value = false;

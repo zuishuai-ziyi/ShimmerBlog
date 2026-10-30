@@ -87,7 +87,7 @@
         </div>
       </form>
       <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
-      <CaptchaDialog v-model:open="profileCaptchaOpen" title="修改资料验证" :action="doSaveProfileWithCaptcha" />
+      <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
     </section>
   </main>
 </template>
@@ -95,7 +95,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
-import http, { errMsg, isCaptchaRequired } from '../api/http';
+import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -204,11 +204,13 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
     profileNotice.value = '已保存';
   } catch (e) {
     if (isCaptchaRequired(e)) {
+      // 风控触发：不打扰文案，直接弹验证窗（验证通过后自动重试）
       profileError.value = '';
-      profileNotice.value = '检测到频繁修改，请完成安全验证';
+      profileNotice.value = '';
       profileCaptchaOpen.value = true;
       return;
     }
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     profileError.value = errMsg(e);
   } finally {
     savingProfile.value = false;

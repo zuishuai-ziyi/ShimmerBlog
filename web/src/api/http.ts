@@ -26,4 +26,13 @@ export function isCaptchaRequired(e: unknown): boolean {
   return false;
 }
 
+// 验证码本身未通过/失效/服务不可用 → 弹窗内自行提示并自动换题，表单层不再重复显示
+export function isCaptchaFailure(e: unknown): boolean {
+  if (axios.isAxiosError(e)) {
+    const data = e.response?.data as { code?: string } | undefined;
+    return data?.code === 'CAPTCHA_FAILED' || data?.code === 'CAPTCHA_UNAVAILABLE';
+  }
+  return false;
+}
+
 export default http;

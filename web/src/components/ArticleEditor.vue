@@ -45,7 +45,7 @@
       />
       <!-- eslint-disable-next-line vue/no-v-html -->
       <div v-else class="prose preview-box" v-html="previewHtml" />
-      <CaptchaDialog v-model:open="captchaOpen" :title="captchaPending === 'upload' ? '上传图片前请先验证' : '发布文章验证'" :action="captchaAction" />
+      <CaptchaDialog v-model:open="captchaOpen" :action="captchaAction" />
     </div>
 
     <p v-if="error" class="error-tip">{{ error }}</p>
@@ -57,7 +57,7 @@
 import { computed, onMounted, reactive, ref } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
-import http, { errMsg } from '../api/http';
+import http, { errMsg, isCaptchaFailure } from '../api/http';
 import type { Article } from '../types';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from './CaptchaDialog.vue';
@@ -145,6 +145,7 @@ async function doSave(status: 'draft' | 'published', captcha?: Captcha) {
       emit('saved');
     }
   } catch (e) {
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     error.value = errMsg(e);
   } finally {
     saving.value = false;
@@ -176,6 +177,7 @@ async function doUpload(file: File, captcha?: Captcha) {
     const snippet = `\n![${file.name}](${data.url})\n`;
     insertAtCursor(snippet);
   } catch (e) {
+    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
     error.value = errMsg(e);
   } finally {
     uploading.value = false;
