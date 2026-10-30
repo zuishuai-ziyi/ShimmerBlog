@@ -23,6 +23,7 @@ export async function publicUser(u) {
     bio: u.bio || '',
     status: u.status,
     github_id: u.github_id,
+    google_id: u.google_id ?? null,
     email_verified: !!u.email_verified,
     created_at: u.created_at,
   };

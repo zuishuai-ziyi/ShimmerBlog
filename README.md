@@ -93,8 +93,9 @@ cd ../web && npm run dev
   - GitHub：GitHub → Settings → Developer settings → OAuth Apps，Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`）。
   - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
   - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
-  - **国内服务器**：直连不了 GitHub/Google API 时，在后台「第三方登录」页填「出站代理」（或环境变量 `OAUTH_PROXY_URL`），令牌换取与用户信息请求自动走代理；访客浏览器仍需能自行打开 GitHub / Google 授权页。
-  - **VLESS/Reality 节点**：代理字段只认 HTTP(S)/CONNECT 代理，不能直接填 `vless://` 链接——需在应用所在服务器跑一个 sing-box/xray 客户端把节点转成本地 HTTP 端口（sing-box inbound 用 `mixed`，同端口兼 HTTP+SOCKS），再填 `http://127.0.0.1:端口`。线上 198 机的部署：`/etc/sing-box/client.json`（VLESS 出站 + mixed 127.0.0.1:2080）+ `systemctl enable --now sing-box-client`，后台已填 `http://127.0.0.1:2080`。
+  - **头像本地化**：第三方登录注册（含邮箱并档）时，服务端自动下载第三方头像，走与用户上传同规格的校验（png/jpg/gif/webp、≤2MB、魔数嗅探，另加 https 强制、`githubusercontent.com`/`googleusercontent.com`/`ggpht.com` 域名白名单、重定向逐跳复检）后转存为本站文件；校验不过则回落默认头像（不阻断注册），原始第三方头像地址存 `users.remote_avatar_url`。绑定过第三方的用户可在个人中心/空间页点「更新第三方头像」手动重新拉取（GitHub 由用户 id 直接构造公开地址，Google 依赖存储的原始地址；每用户 60 秒限频）。历史外链头像用户也可手动同步一键转本站链接。
+  - **国内服务器**：直连不了 GitHub/Google API 时，在后台「第三方登录」页填「出站代理」（或环境变量 `OAUTH_PROXY_URL`），令牌换取、用户信息与第三方头像下载请求自动走代理；访客浏览器仍需能自行打开 GitHub / Google 授权页。
+  - **VLESS/Reality 节点**：代理字段只认 HTTP(S)/CONNECT 代理，不能直接填 `vless://` 链接——需在应用所在服务器跑一个 sing-box/xray 客户端把节点转成本地 HTTP 端口（sing-box inbound 用 `mixed`，同端口兼 HTTP+SOCKS），再填 `http://127.0.0.1:端口`。线上 198 机现用自建 gost `http://127.0.0.1:3128`（后台已填）。
 - **邮件（验证码 / 欢迎 / 测试）**：配置 SMTP 后验证码发到邮箱；未配置时后端把验证码打到服务端控制台，并在 `/api/auth/send-code` 响应里带 `devCode`（前端会显示「开发模式验证码」）。生产环境请务必配置 SMTP。
 - **注册需邮箱验证**：注册表单须先点「发送验证码」（`POST /api/auth/send-code` 带 `purpose=register`，邮箱已被占用时直接 409），再带 6 位验证码提交；后端校验通过后建号并直接标记 `email_verified=1`，不再存在未验证账号。测试脚本统一用 `server/scripts/_test-lib.mjs` 的 `registerUser()` 完成「发码→取码→注册」。
 - **邮件模板全自定义（后台「邮件」页）**：验证码、注册欢迎、后台测试三类邮件的主题与正文均可在后台自定义并持久化，置空即回退内置默认；正文支持占位符 `{site}`（站点名）/ `{code}`（验证码）/ `{name}`（用户昵称），点击占位符 chip 插入光标处。新用户注册（含验证码首登自动注册、GitHub/Google 首次授权）后自动发送欢迎邮件（SMTP 未配置时静默跳过，不影响注册流程）。
@@ -118,7 +119,7 @@ cd ../web && npm run dev
 | `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
 | `GET /api/auth/google` · `/api/auth/google/callback` | Google OAuth（OIDC，未配置返回 501） |
-| `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` | 当前用户 / 改名 / 换头像 |
+| `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` · `POST /api/auth/avatar/refresh-oauth` | 当前用户 / 改名 / 换头像 / 从第三方同步头像（绑定过 GitHub/Google 才可用，60s 限频） |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |
 | `GET /api/articles/:id` | 文章详情（草稿仅作者或管理员可见） |
 | `GET /api/articles/mine` | 我的文章（含草稿） |
@@ -141,7 +142,7 @@ cd ../web && npm run dev
 
 ```bash
 cd server
-node scripts/smoke-auth.mjs       # 19 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名
+node scripts/smoke-auth.mjs       # 28 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名/第三方头像同步
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 73 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/第三方登录与出站代理配置/默认用户名颜色/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）

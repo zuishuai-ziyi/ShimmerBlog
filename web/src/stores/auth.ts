@@ -9,6 +9,8 @@ export interface User {
   bio: string | null;
   avatar_url: string | null;
   email_verified: number;
+  github_id: number | null;
+  google_id: string | null;
 }
 
 export const useAuthStore = defineStore('auth', {

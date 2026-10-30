@@ -1,6 +1,6 @@
 /**
  * 用户系统冒烟测试：node scripts/smoke-auth.mjs
- * 覆盖：注册→登录→/api/me→验证码登录→GitHub 占位→头像上传→资料修改
+ * 覆盖：注册→登录→/api/me→验证码登录→GitHub 占位→头像上传→资料修改→第三方头像同步
  */
 import { pool } from '../src/db.js';
 
@@ -109,8 +109,48 @@ r = await fetch(`${B}/profile`, {
 body = await r.json().catch(() => ({}));
 ok('profile update', r.status === 200 && body.user?.name === '改名后的用户');
 
+// ---------- 第三方头像同步（POST /auth/avatar/refresh-oauth） ----------
+r = await post('/avatar/refresh-oauth', {});
+ok('avatar refresh 未登录 401', r.status === 401);
+
+r = await post('/avatar/refresh-oauth', {}, t1);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh 未绑定第三方 400', r.status === 400 && String(body.error || '').includes('未绑定'), `${r.status} ${body.error ?? ''}`);
+
+// 绑定 GitHub（octocat 公开头像）后手动同步：服务端下载→同规格校验→转存为本站文件
+await pool.query('UPDATE users SET github_id = 583231, remote_avatar_url = NULL WHERE email = ?', [MAIL]);
+r = await post('/avatar/refresh-oauth', {}, t1);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh GitHub 200', r.status === 200 && body.url?.startsWith('/uploads/avatars/'), `${r.status} ${body.error ?? body.url ?? ''}`);
+ok('avatar refresh 后 user.avatar_url 为本站链接', r.status === 200 && body.user?.avatar_url === body.url);
+if (r.status === 200) {
+  const [urows] = await pool.query('SELECT avatar_url, remote_avatar_url FROM users WHERE email = ?', [MAIL]);
+  ok('avatar refresh 后 remote_avatar_url 已记录', urows[0]?.avatar_url === body.url && String(urows[0]?.remote_avatar_url || '').includes('avatars.githubusercontent.com'));
+  const img = await fetch(`http://localhost:3010${body.url}`);
+  ok('avatar refresh 文件可访问', img.status === 200 && (img.headers.get('content-type') ?? '').startsWith('image/'));
+}
+
+r = await post('/avatar/refresh-oauth', {}, t1);
+ok('avatar refresh 限频 429', r.status === 429);
+
+// 仅绑 Google：无 remote_avatar_url → 400；域名不在白名单 → 502（拒绝落盘）
+const syncMail = `avsync-${Date.now()}@shimmer.dev`;
+r = await post('/send-code', { email: syncMail });
+const syncCode = (await r.json().catch(() => ({}))).devCode ?? (await latestCode(syncMail));
+r = await post('/login/code', { email: syncMail, code: syncCode });
+const t3 = (await r.json().catch(() => ({}))).token;
+await pool.query('UPDATE users SET github_id = NULL, google_id = ?, remote_avatar_url = NULL WHERE email = ?', ['mock-google-sub', syncMail]);
+r = await post('/avatar/refresh-oauth', {}, t3);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh Google 无来源 400', r.status === 400 && String(body.error || '').includes('缺少'), `${r.status} ${body.error ?? ''}`);
+
+await pool.query("UPDATE users SET remote_avatar_url = 'https://evil.example/a.png' WHERE email = ?", [syncMail]);
+r = await post('/avatar/refresh-oauth', {}, t3);
+body = await r.json().catch(() => ({}));
+ok('avatar refresh 白名单外域名 502', r.status === 502, `${r.status} ${body.error ?? ''}`);
+
 // 清理本脚本创建的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
-await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail]]);
+await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail]]);
 
 console.log(`\n== ${pass} pass, ${fail} fail ==`);
 process.exit(fail ? 1 : 0);

@@ -65,6 +65,15 @@
             <input type="file" accept="image/*" hidden @change="uploadAvatar" />
             {{ uploadingAvatar ? '上传中…' : '更换头像' }}
           </label>
+          <button
+            v-if="auth.user?.github_id || auth.user?.google_id"
+            class="upload-chip"
+            type="button"
+            :disabled="refreshingAvatar"
+            @click="refreshOAuthAvatar"
+          >
+            {{ refreshingAvatar ? '同步中…' : '更新第三方头像' }}
+          </button>
           <router-link class="space-link" :to="`/space/${auth.user?.id}`">我的空间 →</router-link>
         </div>
         <div class="field">
@@ -210,7 +219,7 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
       profileCaptchaOpen.value = true;
       return;
     }
-    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
+    if (isCaptchaFailure(e)) throw e; // 验证码未通过：抛给弹窗处理（弹窗内提示+自动换题），吞掉会被弹窗误认为成功而关闭
     profileError.value = errMsg(e);
   } finally {
     savingProfile.value = false;
@@ -236,6 +245,23 @@ async function uploadAvatar(ev: Event) {
     profileError.value = errMsg(e);
   } finally {
     uploadingAvatar.value = false;
+  }
+}
+
+/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见） */
+const refreshingAvatar = ref(false);
+async function refreshOAuthAvatar() {
+  if (refreshingAvatar.value) return;
+  refreshingAvatar.value = true;
+  profileError.value = '';
+  try {
+    const { data } = await http.post<{ user: any }>('/auth/avatar/refresh-oauth');
+    if (data.user) auth.user = data.user;
+    profileNotice.value = '已从第三方同步头像';
+  } catch (e) {
+    profileError.value = errMsg(e);
+  } finally {
+    refreshingAvatar.value = false;
   }
 }
 

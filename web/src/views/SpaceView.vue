@@ -33,6 +33,15 @@
       <div class="f-ops">
         <button class="btn-save" :disabled="saving" @click="saveProfile">{{ saving ? '保存中…' : '保存' }}</button>
         <button class="btn-cancel" @click="editing = false">取消</button>
+        <button
+          v-if="user?.github_id || user?.google_id"
+          class="btn-cancel"
+          type="button"
+          :disabled="refreshingAvatar"
+          @click="refreshOAuthAvatar"
+        >
+          {{ refreshingAvatar ? '同步中…' : '更新第三方头像' }}
+        </button>
         <span v-if="editMsg" class="edit-msg" :class="{ err: !editOk }">{{ editMsg }}</span>
       </div>
     </section>
@@ -77,6 +86,8 @@ interface SpaceUser {
   avatar_url: string | null;
   bio: string;
   created_at: string;
+  github_id: number | null;
+  google_id: string | null;
 }
 interface SpaceArticle {
   id: number;
@@ -129,6 +140,26 @@ async function saveProfile() {
   await doSaveProfile();
 }
 
+/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见） */
+const refreshingAvatar = ref(false);
+async function refreshOAuthAvatar() {
+  if (refreshingAvatar.value) return;
+  refreshingAvatar.value = true;
+  editOk.value = false;
+  try {
+    await http.post('/auth/avatar/refresh-oauth');
+    await load(); // 重新拉取本人资料，头像即更新
+    editOk.value = true;
+    editMsg.value = '✓ 已从第三方同步头像';
+    setTimeout(() => (editing.value = false), 800);
+  } catch (e) {
+    editOk.value = false;
+    editMsg.value = errMsg(e);
+  } finally {
+    refreshingAvatar.value = false;
+  }
+}
+
 const profileCaptchaOpen = ref(false);
 const doSaveProfileWithCaptcha = async (c: { key: string; value: string }) => {
   await doSaveProfile(c);
@@ -159,7 +190,7 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
       profileCaptchaOpen.value = true;
       return;
     }
-    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
+    if (isCaptchaFailure(e)) throw e; // 验证码未通过：抛给弹窗处理（弹窗内提示+自动换题），吞掉会被弹窗误认为成功而关闭
     editOk.value = false;
     editMsg.value = errMsg(e);
   } finally {

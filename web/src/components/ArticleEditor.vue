@@ -145,7 +145,7 @@ async function doSave(status: 'draft' | 'published', captcha?: Captcha) {
       emit('saved');
     }
   } catch (e) {
-    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
+    if (isCaptchaFailure(e)) throw e; // 验证码未通过：抛给弹窗处理（弹窗内提示+自动换题），吞掉会被弹窗误认为成功而关闭
     error.value = errMsg(e);
   } finally {
     saving.value = false;
@@ -177,7 +177,7 @@ async function doUpload(file: File, captcha?: Captcha) {
     const snippet = `\n![${file.name}](${data.url})\n`;
     insertAtCursor(snippet);
   } catch (e) {
-    if (isCaptchaFailure(e)) return; // 验证码未通过：弹窗内已提示并自动换题
+    if (isCaptchaFailure(e)) throw e; // 验证码未通过：抛给弹窗处理（弹窗内提示+自动换题），吞掉会被弹窗误认为成功而关闭
     error.value = errMsg(e);
   } finally {
     uploading.value = false;

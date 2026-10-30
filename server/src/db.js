@@ -96,6 +96,7 @@ export async function initDatabase() {
   await ensureColumn('users', 'bio', 'bio VARCHAR(500) NULL AFTER name_color');
   await ensureColumn('users', 'permissions', 'permissions JSON NULL AFTER bio');
   await ensureColumn('users', 'google_id', 'google_id VARCHAR(255) NULL UNIQUE AFTER github_id');
+  await ensureColumn('users', 'remote_avatar_url', 'remote_avatar_url VARCHAR(500) NULL AFTER avatar_url');
   await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login'").catch(() => {});
   // 彻底删除历史「已注销」存量行（含级联文章），再把 status 枚举回退为两态
   await pool.query("DELETE FROM users WHERE status = 'deleted'").catch(() => {});

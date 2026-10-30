@@ -582,3 +582,15 @@
   - 五视图接线同步：移除各自 `title`；`ConsoleView`/`SpaceView` 风控分支删除提示文案（静默直接弹窗）；`LoginView`/`AdminView`/`ArticleEditor` 业务 catch 增加 `isCaptchaFailure → return`（弹窗已处理，表单层不再重复显示错误）。
 - 安全性：验证判定全部仍在服务端（verifyCaptcha → check-data + 一 key 一用）；code 字段仅用于前端分流，不参与任何放行判定；换题重验仍走完整服务端校验。
 - 测试：smoke-captcha **30/0**（错验证码断言追加 `code==='CAPTCHA_FAILED'`）；回归 smoke-auth 19/0、smoke-admin 73/0、smoke-articles 24/0、cleanup 无残留、`npm run build` 通过（CaptchaDialog-Cqf_ov1b.js + 独立 CSS chunk）。
+
+## 59. OAuth 头像本地化 + 手动同步第三方头像 + 弹窗误关闭修复
+
+- 用户要求：①第三方登录用户头像不要直接引用外链，注册时由服务端下载转存为本站链接（流程与用户上传头像相同、不省验证步骤；不合规则回落默认头像）；绑定第三方的用户可手动触发头像更新；②验证码验证失败时弹窗直接关闭而未刷新（bug）。
+- 实现：
+  - **共享出站请求**：`oauthFetch` 从 `routes/auth.js` 抽至 `services/oauth-fetch.js`（OAuth API 与头像下载共用，保留 oauth_proxy_url 代理支持）。
+  - **下载转存服务** `services/avatar.js`：`saveAvatarFromUrl(url)` 与用户上传头像同规格落盘（`uploads/avatars/{ts}-{hex}.{ext}` 同名规则、png/jpg/gif/webp、≤2MB），并在上传校验之上加严：强制 https、域名白名单（`githubusercontent.com`/`googleusercontent.com`/`ggpht.com` 及子域）、手动跟随重定向（≤3 跳，每跳复检协议与域名防绕过）、Content-Length 预检 + 实际字节复核、魔数嗅探且必须与远端 Content-Type 一致（伪装内容直接拒绝）。
+  - **注册本地化**：`findOrCreateOAuthUser` 新建用户分支先下载转存第三方头像，成功存本站链接、失败回落默认头像（不阻断注册）；`users` 表新增 `remote_avatar_url VARCHAR(500)`（ensureColumn，启动自动补列）存原始第三方头像地址，邮箱并档分支同样记录。
+  - **手动同步端点** `POST /api/auth/avatar/refresh-oauth`（authRequired）：须绑定 GitHub/Google（否则 400）；GitHub 由 `github_id` 直接构造公开地址 `avatars.githubusercontent.com/u/{id}?size=460`（无需重新授权），Google 用存储的 `remote_avatar_url`（缺失提示重新登录该第三方账号）；下载校验流程与注册完全一致，失败 502 且不动现有头像；每用户 60 秒限频（429）。返回 `{ user, url }`；`publicUser` 补充 `google_id`。
+  - **前端**：`ConsoleView` 个人资料与 `SpaceView` 编辑区在绑定过第三方时显示「更新第三方头像」按钮（`stores/auth.ts` User 接口 +`github_id`/`google_id`，SpaceView `SpaceUser` 同步）。
+  - **弹窗误关闭修复**：根因是五视图 catch 里 `if (isCaptchaFailure(e)) return;` 把验证码错误吞掉后 action 以成功收场，`CaptchaDialog.onConfirm` 走成功分支 `close()`。修复：全部改为 `throw e` 重新抛给弹窗（LoginView doSubmit/doSendCode、ConsoleView、SpaceView、AdminView doLogin、ArticleEditor doSave/doUpload 共 6 处），由弹窗既有分流处理——验证码类错误留在弹窗内提示并自动换题，业务错误仍关闭弹窗由表单展示。直接提交路径（无弹窗）不会产生验证码类错误，重抛不会造成未处理拒绝。
+- 测试：smoke-auth **28/0**（+9：refresh 未登录 401 / 未绑定 400 / 绑 GitHub 后真实下载 avatars.githubusercontent.com 转存 200 + remote_avatar_url 落库 + 文件本站可访问 / 限频 429 / Google 无来源 400 / 白名单外域名 502）；回归 smoke-captcha 30/0、smoke-admin 73/0、smoke-articles 24/0、e2e-mail-tpl 20/0、cleanup 无残留、`npm run build` 通过。
