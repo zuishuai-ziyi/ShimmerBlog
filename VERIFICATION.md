@@ -617,3 +617,8 @@
 - 测试：smoke-captcha **39/0**（+9：切 provider 生效与 /site 暴露、非法 provider 400、缺/空 token 400、siteverify 拒绝 400、通过后到密码校验 401（mock 校验 secret 送达）、同 token 重放 400、服务不可用 502、还原回原 provider）；smoke-auth 34/0、smoke-admin 76/0、smoke-articles 24/0、`npm run build` 通过（vue-tsc 无错）。
 - 上线：线上 settings 预置 `captcha_provider=recaptcha` + 用户提供的 v2 密钥（site/secret），`captcha_enabled=1`；GoCaptcha 配置原样保留，后台可一键切回。
 - #lesson：①PowerShell `$out -match 'FAIL|Error:'` 大小写不敏感，JSON 里的 `"error":` 会造成假失败——判失败要用 `Select-String '\bFAIL\b'` 或核对「结果：N 通过 / 0 失败」行；②loginLimiter 按 `ip:email` 计数（15min/10 次），smoke 内多次登录验证换不同测试账号分桶，避免 429 污染断言。
+
+### 61.1 修复：reCAPTCHA 挑战弹层被验证弹窗遮挡
+- 现象：reCAPTCHA 勾选框点击后，Google 图片挑战层不出现（被「安全验证」弹窗遮挡）。根因：CaptchaDialog 用 `showModal()` 打开 → 原生 dialog 进入浏览器顶层（top layer），高于一切 z-index；Google 挑战层是 body 级 iframe（z-index ≈ 2×10⁹），仍被压在弹窗后面。
+- 修复：`web/src/components/CaptchaDialog.vue` 按 provider 分流打开方式——gocaptcha 保持 `showModal()`（点选画布渲染在弹窗内部，无外层弹层，顶层特性继续提供焦点困住）；recaptcha 改 `show()`（非模态、不进顶层）+ `captcha-modal--flat` 自绘全屏遮罩（z-index 99999，远小于挑战层 2e9），卡片视觉抽到 `.captcha-panel` 内层（两模式共用一套模板）；非模态 Esc 不原生关弹窗，手动接管 keydown；close 时清理监听与样式类。
+- 验证：`npm run build` 通过（CaptchaDialog-C5zrQS58.js）；推送后线上 bundle 哈希对齐。

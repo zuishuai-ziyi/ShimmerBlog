@@ -11,7 +11,7 @@
  *   action 抛验证码类错误（CAPTCHA_FAILED/CAPTCHA_UNAVAILABLE）→ 弹窗内下方小字提示并自动换题/重置，
  *   用户只需重新验证，无需重试整个操作；
  *   其他业务错误（如密码错误）→ 关闭弹窗，由表单层展示错误。
- * 交互：原生 <dialog>.showModal()——打开时焦点困在弹窗内（Tab 不会落到背景元素）、
+ * 交互：原生 <dialog>——gocaptcha 走 showModal()（顶层、焦点困住）；recaptcha 走 show()（非模态、不进顶层，
  *   页面滚动锁定、点击遮罩空白不关闭（Esc/× 可关闭）。
  * 未启用验证码（site.info.captchaEnabled=false）时父组件不会打开本弹窗。
  */
@@ -182,7 +182,13 @@ watch(
       await nextTick();
       const d = dlgEl.value;
       if (d && !d.open) {
-        d.showModal(); // 原生模态：焦点困住 + 置顶层，背景不可交互
+        if (isRecaptcha.value) {
+          d.show(); // 非模态：不进顶层，否则 Google 挑战弹层（z-index ≈ 2e9）会被顶层弹窗盖住
+          d.classList.add('captcha-modal--flat');
+          window.addEventListener('keydown', onEscKey, true);
+        } else {
+          d.showModal(); // 原生模态：焦点困住 + 置顶层，背景不可交互
+        }
         lockScroll();
       }
       if (isRecaptcha.value) renderRecaptcha();
@@ -196,9 +202,19 @@ watch(
 
 /** 原生 dialog 的 close 事件（Esc / 程序关闭都会触发） */
 function onDialogClose() {
+  window.removeEventListener('keydown', onEscKey, true);
+  dlgEl.value?.classList.remove('captcha-modal--flat');
   restoreScroll();
   resetRecaptcha();
   emit('update:open', false);
+}
+
+/** recaptcha 非模态模式 Esc 不原生关弹窗，手动接管 */
+function onEscKey(e: KeyboardEvent) {
+  if (e.key === 'Escape' && props.open) {
+    e.stopImmediatePropagation();
+    close();
+  }
 }
 
 onBeforeUnmount(restoreScroll);
@@ -243,6 +259,7 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
 
 <template>
   <dialog ref="dlgEl" class="captcha-modal" aria-labelledby="captcha-dlg-title" @close="onDialogClose">
+    <div class="captcha-panel">
     <div class="captcha-head">
       <span id="captcha-dlg-title" class="captcha-title">安全验证</span>
       <button class="captcha-close" type="button" aria-label="关闭" @click="close">×</button>
@@ -267,19 +284,43 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
       <p v-if="error" class="captcha-result">{{ error }}</p>
       <p v-if="busy" class="captcha-busy">正在验证…</p>
     </div>
-  </dialog>
+  </div>
+</dialog>
 </template>
 
 <style scoped>
 dialog.captcha-modal {
   margin: auto;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: var(--text, #e8eef6);
+}
+
+/* recaptcha 非模态模式：show() 不进顶层（否则被压过 Google 挑战弹层 z-index ≈ 2e9），
+   自绘全屏遮罩；z-index 须远小于 2e9，挑战图才能盖在本弹窗上方 */
+dialog.captcha-modal--flat {
+  position: fixed;
+  inset: 0;
+  z-index: 99999;
+  width: 100vw;
+  height: 100dvh;
+  max-width: none;
+  background: rgb(0 0 0 / 45%);
+  backdrop-filter: blur(6px);
+  -webkit-backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.captcha-panel {
   width: min(360px, calc(100vw - 32px));
   padding: 18px 18px 16px;
   border-radius: 16px;
   background: var(--glass-bg, rgb(16 24 36 / 92%));
   border: 1px solid var(--glass-border, rgb(255 255 255 / 12%));
   box-shadow: 0 24px 60px rgb(0 0 0 / 35%);
-  color: var(--text, #e8eef6);
 }
 
 dialog.captcha-modal::backdrop {
@@ -371,5 +412,10 @@ dialog.captcha-modal::backdrop {
 .captcha-modal .go-captcha,
 .captcha-modal .go-captcha * {
   box-sizing: border-box;
+}
+
+/* recaptcha 勾选框 iframe 在面板内留白不裁切 */
+.captcha-panel .recaptcha-box iframe {
+  max-width: 100%;
 }
 </style>
