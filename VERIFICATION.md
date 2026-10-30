@@ -636,3 +636,8 @@
 ### 62.1 后台内联验证码只显示组件本体
 - 反馈：登录框下方显示的是「验证对话框」（标题「安全验证」+ 深色面板外壳），不是验证组件。
 - 修复：inline 模式 v-if 隐藏 .captcha-head（标题+×）与 .captcha-sub（副文案）；`captcha-modal--inline .captcha-panel` 去外壳（无背景/边框/阴影/padding，flex 居中 + gap 6px）；dialog 宽 100% 随宿主卡片。内联下只剩验证组件本体（reCAPTCHA 勾选框或 GoCaptcha 点选图）+ 下方错误/状态小字。
+
+### 62.2 修复：前台验证弹窗未打开也常驻显示
+- 反馈：前台登录页一进入就显示验证码（且未加载）。根因：61.2 重构把 `dialog.captcha-modal` 写成全屏遮罩并 `display: flex`（特异性 0,1,1），覆盖了浏览器 UA 对未打开 `<dialog>` 的 `display: none`（0,0,1）——dialog 没有 open 属性也全屏可见；面板内组件因 open=false 从未取题/渲染，故表现为「显示但未加载」。后台内联模式同理（open attribute 未设时也显示）。
+- 修复：补 `dialog.captcha-modal:not([open]) { display: none; }` 显式恢复隐藏（特异性 0,2,1 稳压 display:flex）。open 由 show()/open attribute 驱动，打开路径不受影响。
+- 验证：build 通过；线上哈希对齐后收尾。

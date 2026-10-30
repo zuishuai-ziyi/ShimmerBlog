@@ -318,6 +318,12 @@ dialog.captcha-modal {
   color: var(--text, #e8eef6);
 }
 
+/* 关键：class 选择器的 display:flex 会覆盖 UA 对未打开 dialog 的 display:none，
+   导致弹窗未 open 也常驻全屏可见——必须显式恢复隐藏 */
+dialog.captcha-modal:not([open]) {
+  display: none;
+}
+
 /* 内联模式：嵌在宿主表单下方的普通面板（后台登录门），无遮罩无定位 */
 dialog.captcha-modal--inline {
   position: static;
