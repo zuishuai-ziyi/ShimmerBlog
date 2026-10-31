@@ -297,13 +297,19 @@ onBeforeUnmount(() => {
 
 // ===== 页签指示条滑动 =====
 const tabsEl = ref<HTMLElement | null>(null);
-const sliderStyle = ref<{ left: string; width: string }>({ left: '0px', width: '0px' });
+const sliderStyle = ref<{ left: string; width: string; transition?: string }>({ left: '0px', width: '0px' });
+let sliderReady = false; // 首次定位前禁用过渡：进入页面时蓝线直接就位，不播放入场动画
 function updateSlider() {
   const wrap = tabsEl.value;
   if (!wrap) return;
   const btn = wrap.querySelector('button.on') as HTMLElement | null;
   if (!btn) return;
-  sliderStyle.value = { left: `${btn.offsetLeft}px`, width: `${btn.offsetWidth}px` };
+  sliderStyle.value = {
+    left: `${btn.offsetLeft}px`,
+    width: `${btn.offsetWidth}px`,
+    transition: sliderReady ? undefined : 'none',
+  };
+  if (!sliderReady) requestAnimationFrame(() => (sliderReady = true));
 }
 watch([mode, (): boolean | undefined => site.info.registerOpen], () => nextTick(updateSlider));
 onMounted(() => {
