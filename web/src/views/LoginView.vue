@@ -1,11 +1,13 @@
 <template>
   <div class="login-page">
     <div class="panel">
-      <div v-if="mode !== 'forgot'" class="tabs">
+      <div v-if="mode !== 'forgot'" ref="tabsEl" class="tabs">
         <button type="button" :class="{ on: mode === 'login' }" @click="switchMode('login')">登录</button>
         <button type="button" v-if="site.info.registerOpen" :class="{ on: mode === 'register' }" @click="switchMode('register')">
           注册
         </button>
+        <!-- 活动页签蓝色指示条：平滑滑动而非消失后出现 -->
+        <span class="tabs-slider" :style="sliderStyle" aria-hidden="true"></span>
       </div>
 
       <form v-if="mode !== 'forgot'" @submit.prevent="submit">
@@ -123,7 +125,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onBeforeUnmount, reactive, ref } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
@@ -290,6 +292,23 @@ async function submitReset() {
 
 onBeforeUnmount(() => {
   if (timer) clearInterval(timer);
+  window.removeEventListener('resize', updateSlider);
+});
+
+// ===== 页签指示条滑动 =====
+const tabsEl = ref<HTMLElement | null>(null);
+const sliderStyle = ref<{ left: string; width: string }>({ left: '0px', width: '0px' });
+function updateSlider() {
+  const wrap = tabsEl.value;
+  if (!wrap) return;
+  const btn = wrap.querySelector('button.on') as HTMLElement | null;
+  if (!btn) return;
+  sliderStyle.value = { left: `${btn.offsetLeft}px`, width: `${btn.offsetWidth}px` };
+}
+watch([mode, (): boolean | undefined => site.info.registerOpen], () => nextTick(updateSlider));
+onMounted(() => {
+  updateSlider();
+  window.addEventListener('resize', updateSlider);
 });
 </script>
 
@@ -310,6 +329,7 @@ onBeforeUnmount(() => {
 }
 
 .tabs {
+  position: relative;
   display: flex;
   gap: 8px;
   margin-bottom: 18px;
@@ -323,13 +343,24 @@ onBeforeUnmount(() => {
   color: var(--text-dim);
   background: transparent;
   border: none;
-  border-bottom: 2px solid transparent;
-  transition: color 0.2s, border-color 0.2s;
+  transition: color 0.2s;
 }
 
 .tabs button.on {
   color: #ffffff;
-  border-bottom-color: var(--accent);
+}
+
+/* 活动页签指示条：单条元素随选中页签平滑滑动 */
+.tabs-slider {
+  position: absolute;
+  bottom: 0;
+  left: 0;
+  width: 0;
+  height: 2px;
+  border-radius: 2px;
+  background: var(--accent);
+  transition: left 0.25s ease, width 0.25s ease;
+  pointer-events: none;
 }
 
 .forgot-tip {

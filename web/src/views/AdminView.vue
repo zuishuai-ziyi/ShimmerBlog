@@ -986,6 +986,13 @@ onMounted(async () => {
   opacity: 1;
 }
 
+.admin input[type='checkbox'] {
+  /* 全局 input 规则给了 width:100% + padding，复选框被拉伸占满整行 */
+  width: auto;
+  padding: 0;
+  flex: none;
+}
+
 .gate-col {
   display: flex;
   flex-direction: column;
