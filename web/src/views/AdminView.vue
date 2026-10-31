@@ -938,6 +938,9 @@ onMounted(async () => {
   --text-1: #16233f;
   --text-2: #46566f;
   --text-3: #8593ab;
+  /* 后台浅色主题：默认文字色为深色（覆盖全站暗色主题 body 的白色默认），
+     未显式设色的元素全部继承深色，避免残留白字不可读 */
+  color: var(--text-1);
   --blue: #2563eb;
   --blue-deep: #1d4ed8;
   --blue-soft: #eef4ff;
@@ -975,6 +978,12 @@ onMounted(async () => {
 .admin textarea {
   /* 后台浅色卡片：覆盖全局暗色主题给 input 的白字默认（漏网类型如 number/select 白字配近白底不可读） */
   color: var(--text-1);
+}
+
+.admin ::placeholder {
+  /* 全局 ::placeholder 是暗色主题的半透明白，浅底上不可读 */
+  color: #a9b4c6;
+  opacity: 1;
 }
 
 .gate-col {
