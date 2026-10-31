@@ -15,6 +15,25 @@ const auth = useAuthStore();
 const msg = ref('正在完成登录…');
 
 onMounted(async () => {
+  // 第三方绑定回调（auth.js bindRedirect：?bind=ok|fail&reason=…）
+  const bind = route.query.bind;
+  if (bind === 'ok' || bind === 'fail') {
+    const reason = typeof route.query.reason === 'string' ? route.query.reason : '';
+    if (bind === 'ok') {
+      msg.value = '绑定成功，正在返回个人中心…';
+      try {
+        await auth.fetchMe();
+      } catch {
+        /* 未登录时跳转后由路由守卫处理 */
+      }
+      setTimeout(() => router.replace('/console'), 1200);
+    } else {
+      msg.value = `绑定失败：${reason || '未知原因'}`;
+      setTimeout(() => router.replace('/console'), 2500);
+    }
+    return;
+  }
+
   const token = route.query.token;
   if (typeof token !== 'string' || !token) {
     msg.value = '登录回调缺少凭证，请返回重新登录。';

@@ -23,7 +23,7 @@ export const authRouter = Router();
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
 /** OAuth state（GitHub / Google 共用，10 分钟有效，单实例内存即可） */
-const oauthStates = new Map();
+const oauthStates = new Map(); // state -> { expires, mode: 'login' | 'bind', userId? }
 
 async function oauthCallbackUri(provider) {
   // 以站点配置 web_origin 为准，不依赖请求头：线上走 nginx 反代时 req.protocol 拿到的是 http，
@@ -274,6 +274,75 @@ authRouter.post('/reset-password', resetLimiter, async (req, res, next) => {
 });
 
 /* ---------- GitHub OAuth ---------- */
+/* ---------- 第三方账号绑定（已登录用户主动绑定 GitHub/Google） ----------
+ * 入口 /auth/bind/:provider（authRequired）：签发 bind 模式 state → 302 授权页；
+ * 回调复用 /auth/:provider/callback，state.mode==='bind' 时只做绑定，不登录/并档/建号。 */
+function bindRedirect(res, origin, ok, reason) {
+  const q = new URLSearchParams({ bind: ok ? 'ok' : 'fail' });
+  if (reason) q.set('reason', reason);
+  res.redirect(`${origin}/auth/callback?${q.toString()}`);
+}
+
+async function startBind(provider, req, res) {
+  const cfg = provider === 'github' ? await githubConfig() : await googleConfig();
+  if (!cfg.clientId || !cfg.clientSecret) {
+    return res.status(501).json({ error: `${provider === 'github' ? 'GitHub' : 'Google'} OAuth 未配置，无法绑定` });
+  }
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'bind', userId: req.user.id });
+  const url = new URL(
+    provider === 'github'
+      ? 'https://github.com/login/oauth/authorize'
+      : 'https://accounts.google.com/o/oauth2/v2/auth'
+  );
+  url.searchParams.set('client_id', cfg.clientId);
+  url.searchParams.set('redirect_uri', await oauthCallbackUri(provider));
+  if (provider === 'github') {
+    url.searchParams.set('scope', 'read:user user:email');
+  } else {
+    url.searchParams.set('response_type', 'code');
+    url.searchParams.set('scope', 'openid email profile');
+  }
+  url.searchParams.set('state', state);
+  res.redirect(url.toString());
+}
+
+authRouter.get('/bind/github', authRequired, (req, res, next) => {
+  startBind('github', req, res).catch(next);
+});
+authRouter.get('/bind/google', authRequired, (req, res, next) => {
+  startBind('google', req, res).catch(next);
+});
+
+/* 绑定模式回调共用：把第三方 id 写到发起用户上（校验未被其他账号占用），不登录不建号 */
+async function finishBind(rec, providerCol, providerId, avatar, res) {
+  const origin = await webOrigin();
+  try {
+    const [cur] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [rec.userId]);
+    const u = cur[0];
+    if (!u) return bindRedirect(res, origin, false, '账号不存在或已注销');
+    const [dup] = await pool.query(
+      `SELECT id FROM users WHERE \`${providerCol}\` = ? AND id <> ? LIMIT 1`,
+      [providerId, rec.userId]
+    );
+    if (dup.length > 0) return bindRedirect(res, origin, false, '该第三方账号已绑定其他本站账号');
+    await pool.query(`UPDATE users SET \`${providerCol}\` = ?, remote_avatar_url = ? WHERE id = ?`, [
+      providerId,
+      avatar || u.remote_avatar_url || null,
+      u.id,
+    ]);
+    // 当前没有头像时后台异步转存第三方头像（已有头像不覆盖）
+    if (avatar && !u.avatar_url) {
+      localizeAvatar(u.id, avatar).catch((e) =>
+        console.error('[oauth-avatar] 绑定头像后台转存失败（保留默认头像）:', String(e?.message || e))
+      );
+    }
+    bindRedirect(res, origin, true);
+  } catch (e) {
+    bindRedirect(res, origin, false, String(e?.message || e));
+  }
+}
+
 authRouter.get('/github', async (req, res) => {
   const gh = await githubConfig();
   const { clientId, clientSecret } = gh;
@@ -283,7 +352,7 @@ authRouter.get('/github', async (req, res) => {
     });
   }
   const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, Date.now() + 10 * 60 * 1000);
+  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'login' });
   const url = new URL('https://github.com/login/oauth/authorize');
   url.searchParams.set('client_id', clientId);
   url.searchParams.set('redirect_uri', await oauthCallbackUri('github'));
@@ -294,7 +363,8 @@ authRouter.get('/github', async (req, res) => {
 
 authRouter.get('/github/callback', async (req, res) => {
   const { code, state } = req.query;
-  const expires = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  const rec = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  const expires = rec?.expires;
   oauthStates.delete(String(state ?? ''));
   if (typeof code !== 'string' || !expires || Date.now() > expires) {
     return res.status(400).json({ error: 'GitHub 回调参数无效或 state 已过期' });
@@ -318,6 +388,10 @@ authRouter.get('/github/callback', async (req, res) => {
       'User-Agent': 'shimmerblog',
     };
     const ghUser = await (await oauthFetch('https://api.github.com/user', { headers })).json();
+    // 绑定模式：只把第三方 id 写到发起用户上，不登录/并档/建号（也省去拉邮箱）
+    if (rec?.mode === 'bind') {
+      return finishBind(rec, 'github_id', ghUser.id, ghUser.avatar_url || null, res);
+    }
     const ghEmailsRes = await oauthFetch('https://api.github.com/user/emails', { headers });
     const ghEmails = ghEmailsRes.ok ? await ghEmailsRes.json() : [];
     const email = ghEmails.find((e) => e.primary && e.verified)?.email || ghUser.email || null;
@@ -345,7 +419,7 @@ authRouter.get('/google', async (req, res) => {
     });
   }
   const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, Date.now() + 10 * 60 * 1000);
+  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'login' });
   const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
   url.searchParams.set('client_id', g.clientId);
   url.searchParams.set('redirect_uri', await oauthCallbackUri('google'));
@@ -357,7 +431,8 @@ authRouter.get('/google', async (req, res) => {
 
 authRouter.get('/google/callback', async (req, res) => {
   const { code, state } = req.query;
-  const expires = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  const rec = typeof state === 'string' ? oauthStates.get(state) : undefined;
+  const expires = rec?.expires;
   oauthStates.delete(String(state ?? ''));
   if (typeof code !== 'string' || !expires || Date.now() > expires) {
     return res.status(400).json({ error: 'Google 回调参数无效或 state 已过期' });
@@ -389,6 +464,10 @@ authRouter.get('/google/callback', async (req, res) => {
     const ui = await uiRes.json();
     // 只信任 Google 明确标注已验证的邮箱
     const email = ui.email && ui.email_verified ? String(ui.email).toLowerCase() : null;
+    // 绑定模式：只把第三方 id 写到发起用户上，不登录/并档/建号
+    if (rec?.mode === 'bind') {
+      return finishBind(rec, 'google_id', String(ui.sub), ui.picture || null, res);
+    }
 
     const { user, createdNew } = await findOrCreateOAuthUser('google_id', String(ui.sub), {
       email,
@@ -458,6 +537,59 @@ authRouter.put('/profile', authRequired, async (req, res, next) => {
     }
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
     res.json({ user: await publicUser(rows[0]) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* ---------- 修改密码（OAuth-only 用户首次设置密码免验当前密码） ---------- */
+const passwordChangeLimiter = makeLimiter({
+  windowMs: 15 * 60 * 1000,
+  max: 5,
+  keyOf: (req) => `pw:${req.user?.id ?? req.ip}`,
+  message: '修改密码过于频繁，请稍后再试',
+});
+
+authRouter.put('/password', authRequired, passwordChangeLimiter, async (req, res, next) => {
+  try {
+    const { currentPassword, newPassword } = req.body ?? {};
+    if (typeof newPassword !== 'string' || newPassword.length < 6) {
+      return res.status(400).json({ error: '新密码至少 6 位' });
+    }
+    if (newPassword.length > 100) return res.status(400).json({ error: '密码最长 100 位' });
+    const [rows] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [req.user.id]);
+    const u = rows[0];
+    if (!u) return res.status(403).json({ error: '账号不可用' });
+    if (u.password_hash) {
+      if (!currentPassword) return res.status(400).json({ error: '请输入当前密码' });
+      const ok = await bcrypt.compare(String(currentPassword ?? ''), u.password_hash);
+      if (!ok) return res.status(401).json({ error: '当前密码错误' });
+    }
+    const hash = await bcrypt.hash(newPassword, 10);
+    await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, u.id]);
+    const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
+    res.json({ user: await publicUser(fresh[0]), message: u.password_hash ? '密码已修改' : '密码已设置' });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* ---------- 解绑第三方账号 ----------
+ * 解绑后必须仍保留至少一种登录方式（密码或另一第三方），避免把自己锁死。 */
+authRouter.delete('/oauth/:provider', authRequired, async (req, res, next) => {
+  try {
+    const { provider } = req.params;
+    const col = provider === 'github' ? 'github_id' : provider === 'google' ? 'google_id' : null;
+    if (!col) return res.status(400).json({ error: '不支持的第三方类型' });
+    const u = req.user;
+    if (!u[col]) return res.status(400).json({ error: '尚未绑定该第三方账号' });
+    const hasOther = u.password_hash || (provider === 'github' ? u.google_id : u.github_id);
+    if (!hasOther) {
+      return res.status(400).json({ error: '解绑后将无法登录：请先设置密码，或保留至少一种第三方登录' });
+    }
+    await pool.query(`UPDATE users SET \`${col}\` = NULL WHERE id = ?`, [u.id]);
+    const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
+    res.json({ user: await publicUser(fresh[0]), message: '已解绑' });
   } catch (e) {
     next(e);
   }

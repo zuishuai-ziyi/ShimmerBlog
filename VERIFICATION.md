@@ -641,3 +641,18 @@
 - 反馈：前台登录页一进入就显示验证码（且未加载）。根因：61.2 重构把 `dialog.captcha-modal` 写成全屏遮罩并 `display: flex`（特异性 0,1,1），覆盖了浏览器 UA 对未打开 `<dialog>` 的 `display: none`（0,0,1）——dialog 没有 open 属性也全屏可见；面板内组件因 open=false 从未取题/渲染，故表现为「显示但未加载」。后台内联模式同理（open attribute 未设时也显示）。
 - 修复：补 `dialog.captcha-modal:not([open]) { display: none; }` 显式恢复隐藏（特异性 0,2,1 稳压 display:flex）。open 由 show()/open attribute 驱动，打开路径不受影响。
 - 验证：build 通过；线上哈希对齐后收尾。
+
+## 63. 修改密码 + 第三方账号绑定管理
+- **后端**（`server/src/routes/auth.js`）：
+  - `oauthStates` 值升级 `{ expires, mode: 'login'|'bind', userId? }`（登录路径行为不变）。
+  - `GET /api/auth/bind/github|google`（authRequired）：签发 bind 模式 state（10min）→ 302 授权页；OAuth 未配置 501。
+  - 回调复用既有 `/api/auth/:provider/callback`：`state.mode==='bind'` 时走 `finishBind()`——只把第三方 id 写到发起用户（id 已被其他账号占用 → 失败回跳带 reason），GitHub 分支省去拉邮箱；绑定成功且用户无头像时后台异步转存第三方头像；结果经 `bindRedirect` 跳 `web_origin/auth/callback?bind=ok|fail(&reason=)`。
+  - `PUT /api/auth/password`（authRequired + 15min/5 次限频）：`newPassword` 6–100 位；已设密码必须 `currentPassword`（400「请输入当前密码」/401「当前密码错误」），未设密码（第三方注册用户）首设免验；返回最新 `user` + `message`（密码已修改/密码已设置）。
+  - `DELETE /api/auth/oauth/:provider`（authRequired）：未绑定 400；解绑后须仍保留 `password_hash` 或另一第三方，否则 400「解绑后将无法登录…」；返回最新 `user`。
+  - `publicUser` +`has_password: !!u.password_hash`（utils.js）。
+- **前端**：
+  - `web/src/stores/auth.ts` User 接口 +`has_password`。
+  - `web/src/views/ConsoleView.vue` 个人资料 tab 新增两卡：「账号安全」（改密表单，`has_password` 决定是否显示当前密码框与按钮文案「修改/设置密码」，前后端一致性校验）；「第三方账号绑定」（GitHub/Google 行：绑定状态徽标、解绑按钮 DELETE、未绑定且站点启用该方式时「绑定」链接跳 `/api/auth/bind/:p` 整页 302）。
+  - `web/src/views/AuthCallbackView.vue` 处理 `?bind=ok|fail&reason=`：ok → `fetchMe()` 刷新用户后回个人中心；fail → 展示原因后回个人中心；token 回调优先级不变。
+- **测试**：smoke-auth +13（401/501/400 入口、改密全路径、首设免验、新密码登录、解绑保护与成功、非法 provider）→ **47/0**；smoke-admin 76/0、captcha 39/0、articles 24/0 未受影响；`npm run build` 通过。
+- **本地排障**：smoke 全 404「接口不存在」→ 根因 3010 被旧 node 进程（10/30 23:11 启动）占用，误杀了非监听进程；用 `Get-NetTCPConnection -LocalPort 3010` 找到真实 owner 后重启，47/0。

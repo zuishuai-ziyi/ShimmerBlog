@@ -11,6 +11,7 @@ export interface User {
   email_verified: number;
   github_id: number | null;
   google_id: string | null;
+  has_password: boolean;
 }
 
 export const useAuthStore = defineStore('auth', {

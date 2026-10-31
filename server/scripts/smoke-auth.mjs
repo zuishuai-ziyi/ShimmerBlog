@@ -184,8 +184,57 @@ if (r.status === 200) {
   ok('回填后 remote_avatar_url 已记录', String(brows[0]?.remote_avatar_url || '').includes('avatars.githubusercontent.com'), String(brows[0]?.remote_avatar_url));
 }
 
+// ===== 第 63 轮：修改密码 + 第三方绑定/解绑 =====
+const pwMail = `pw-${Date.now()}@shimmer.dev`;
+r = await post('/send-code', { email: pwMail, purpose: 'register' });
+const pwCode = (await r.json().catch(() => ({}))).devCode ?? (await latestCode(pwMail));
+r = await post('/register', { email: pwMail, password: 'pw-old-123', name: '改密用户', code: pwCode });
+const pwT = (await r.json().catch(() => ({}))).token;
+ok('pw register 201', r.status === 201 && !!pwT);
+
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ newPassword: 'pw-new-456' }) });
+ok('password 未登录 401', r.status === 401);
+r = await fetch(`${B}/bind/github`, { headers: { Authorization: `Bearer ${pwT}` } });
+ok('bind/github 未配置 501', r.status === 501, String(r.status));
+r = await fetch(`${B}/bind/github`);
+ok('bind/github 未登录 401', r.status === 401);
+
+// 有密码时：必须验当前密码
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pwT}` }, body: JSON.stringify({ newPassword: 'pw-new-456' }) });
+body = await r.json().catch(() => ({}));
+ok('password 缺当前密码 400', r.status === 400 && body.error === '请输入当前密码', `${r.status} ${body.error ?? ''}`);
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pwT}` }, body: JSON.stringify({ currentPassword: 'wrong-cur', newPassword: 'pw-new-456' }) });
+body = await r.json().catch(() => ({}));
+ok('password 错当前密码 401', r.status === 401 && body.error === '当前密码错误', `${r.status} ${body.error ?? ''}`);
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pwT}` }, body: JSON.stringify({ currentPassword: 'pw-old-123', newPassword: 'pw-new-456' }) });
+body = await r.json().catch(() => ({}));
+ok('password 改密 200', r.status === 200 && body.message === '密码已修改' && body.user?.has_password === true, `${r.status} ${body.error ?? body.message ?? ''}`);
+r = await post('/login', { email: pwMail, password: 'pw-new-456' });
+ok('新密码登录 200', r.status === 200);
+
+// 无密码用户（OAuth-only）：首设密码免验当前密码
+await pool.query('UPDATE users SET password_hash = NULL WHERE email = ?', [pwMail]);
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${pwT}` }, body: JSON.stringify({ newPassword: 'pw-new-789' }) });
+body = await r.json().catch(() => ({}));
+ok('password 首设免验当前密码 200', r.status === 200 && body.message === '密码已设置', `${r.status} ${body.error ?? body.message ?? ''}`);
+
+// 解绑：保护规则 + 成功解绑
+r = await fetch(`${B}/oauth/github`, { method: 'DELETE', headers: { Authorization: `Bearer ${pwT}` } });
+body = await r.json().catch(() => ({}));
+ok('oauth 解绑未绑定 400', r.status === 400 && body.error === '尚未绑定该第三方账号', `${r.status} ${body.error ?? ''}`);
+r = await fetch(`${B}/oauth/foo`, { method: 'DELETE', headers: { Authorization: `Bearer ${pwT}` } });
+ok('oauth 解绑非法 provider 400', r.status === 400);
+await pool.query("UPDATE users SET google_id = 'pw-mock-sub', password_hash = NULL WHERE email = ?", [pwMail]);
+r = await fetch(`${B}/oauth/google`, { method: 'DELETE', headers: { Authorization: `Bearer ${pwT}` } });
+body = await r.json().catch(() => ({}));
+ok('oauth 解绑后无登录方式 400', r.status === 400 && String(body.error || '').includes('无法登录'), `${r.status} ${body.error ?? ''}`);
+await pool.query("UPDATE users SET password_hash = 'x' WHERE email = ?", [pwMail]);
+r = await fetch(`${B}/oauth/google`, { method: 'DELETE', headers: { Authorization: `Bearer ${pwT}` } });
+body = await r.json().catch(() => ({}));
+ok('oauth 解绑成功 200', r.status === 200 && body.message === '已解绑' && body.user?.google_id === null, `${r.status} ${body.error ?? body.message ?? ''}`);
+
 // 清理本脚本创建的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
-await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail, bothMail]]);
+await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail, bothMail, pwMail]]);
 
 console.log(`\n== ${pass} pass, ${fail} fail ==`);
 process.exit(fail ? 1 : 0);

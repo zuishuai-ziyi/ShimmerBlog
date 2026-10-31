@@ -24,6 +24,7 @@ export async function publicUser(u) {
     status: u.status,
     github_id: u.github_id,
     google_id: u.google_id ?? null,
+    has_password: !!u.password_hash,
     email_verified: !!u.email_verified,
     created_at: u.created_at,
   };

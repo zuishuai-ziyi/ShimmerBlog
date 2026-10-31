@@ -96,6 +96,7 @@ cd ../web && npm run dev
   - GitHub：GitHub → Settings → Developer settings → OAuth Apps，Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`）。
   - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
   - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
+  - **账号绑定与密码**：个人中心「个人资料」页可修改/设置密码（第三方注册用户首设免验当前密码），并管理 GitHub/Google 绑定——未绑定点「绑定」跳第三方授权（回调仅绑定不登录/建号，目标 id 被其他账号占用时报错），已绑定可解绑（解绑后须仍保留密码或另一第三方，避免无法登录）。`users.publicUser.has_password` 标记是否已设密码。
   - **头像本地化**：第三方登录注册（含邮箱并档）时，服务端后台异步下载第三方头像（不阻塞注册/登录），走与用户上传同规格的校验（png/jpg/gif/webp、≤2MB、魔数嗅探，另加 https 强制、`githubusercontent.com`/`googleusercontent.com`/`ggpht.com` 域名白名单、重定向逐跳复检，跳数上限 0–12 与总超时 1–300 秒后台可配）后转存为本站文件；校验不过则回落默认头像（不影响注册），原始第三方头像地址存 `users.remote_avatar_url`，且每次第三方登录都会刷新（换号重登一次即可更新来源）。绑定过第三方的用户可在个人中心/空间页点「从第三方同步头像」手动重新拉取（GitHub 由用户 id 直接构造公开地址；Google 优先用记录的原始地址，老用户记录缺失时若现有头像仍是白名单域名外链会自动回填当来源；绑定了多个第三方时前端分开按钮让用户选择来源，接口也支持 `body.provider`；每用户 60 秒限频）。历史外链头像用户也可手动同步一键转本站链接。
   - **国内服务器**：直连不了 GitHub/Google API 时，在后台「第三方登录」页填「出站代理」（或环境变量 `OAUTH_PROXY_URL`），令牌换取、用户信息与第三方头像下载请求自动走代理；访客浏览器仍需能自行打开 GitHub / Google 授权页。
   - **VLESS/Reality 节点**：代理字段只认 HTTP(S)/CONNECT 代理，不能直接填 `vless://` 链接——需在应用所在服务器跑一个 sing-box/xray 客户端把节点转成本地 HTTP 端口（sing-box inbound 用 `mixed`，同端口兼 HTTP+SOCKS），再填 `http://127.0.0.1:端口`。线上 198 机现用自建 gost `http://127.0.0.1:3128`（后台已填）。
@@ -125,6 +126,8 @@ cd ../web && npm run dev
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
 | `GET /api/auth/google` · `/api/auth/google/callback` | Google OAuth（OIDC，未配置返回 501） |
 | `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` · `POST /api/auth/avatar/refresh-oauth` | 当前用户 / 改名 / 换头像 / 从第三方同步头像（绑定过 GitHub/Google 才可用，`body.provider` 可指定来源，60s 限频） |
+| `PUT /api/auth/password` | 修改/设置密码（15 分钟 5 次；已设密码须验 `currentPassword`，未设密码的第三方用户首设免验；`newPassword` 6–100 位） |
+| `GET /api/auth/bind/:provider` · `DELETE /api/auth/oauth/:provider` | 绑定第三方（登录态 302 到授权页，回调仅绑定不登录）/ 解绑（解绑后须仍保留密码或另一第三方可登录） |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |
 | `GET /api/articles/:id` | 文章详情（草稿仅作者或管理员可见） |
 | `GET /api/articles/mine` | 我的文章（含草稿） |
@@ -147,7 +150,7 @@ cd ../web && npm run dev
 
 ```bash
 cd server
-node scripts/smoke-auth.mjs       # 34 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名/第三方头像同步（provider 选择/来源回填）
+node scripts/smoke-auth.mjs       # 47 项：注册（含邮箱验证码校验）/登录/验证码/OAuth 占位/头像/改名/第三方头像同步（provider 选择/来源回填）/改密与首设/绑定入口与解绑保护
 node scripts/smoke-articles.mjs   # 24 项：草稿可见性/权限/分页/置顶/图片上传/测试用户自清理
 node scripts/smoke-admin.mjs      # 76 项：用户管理/扩展操作/删除用户/站点配置/密钥掩码/第三方登录与出站代理与头像下载限制配置/默认用户名颜色/注册开关/邮件模板元数据
 node scripts/e2e-mail-tpl.mjs     # 20 项：邮件模板全自定义（元数据/持久化/渲染/置空回退默认+还原原值，测试用户自清理）

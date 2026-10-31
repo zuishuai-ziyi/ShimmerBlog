@@ -98,6 +98,64 @@
       </form>
       <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
       <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
+
+      <!-- ======== 账号安全：修改/设置密码 ======== -->
+      <form class="glass form-card" @submit.prevent="savePassword">
+        <h2>账号安全</h2>
+        <div class="field">
+          <label>当前密码</label>
+          <input
+            v-if="auth.user?.has_password"
+            v-model="pwCurrent"
+            type="password"
+            autocomplete="current-password"
+            placeholder="输入当前密码"
+          />
+          <p v-else class="field-hint">当前账号未设置密码（第三方登录注册）。设置后可使用「邮箱 + 密码」登录。</p>
+        </div>
+        <div class="field">
+          <label>新密码</label>
+          <input v-model="pwNew" type="password" autocomplete="new-password" placeholder="至少 6 位" />
+        </div>
+        <div class="field">
+          <label>确认新密码</label>
+          <input v-model="pwConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码" />
+        </div>
+        <p v-if="pwError" class="error-tip">{{ pwError }}</p>
+        <p v-if="pwNotice" class="notice">{{ pwNotice }}</p>
+        <div class="form-actions">
+          <button class="btn" type="submit" :disabled="savingPw">
+            {{ savingPw ? '保存中…' : auth.user?.has_password ? '修改密码' : '设置密码' }}
+          </button>
+        </div>
+      </form>
+
+      <!-- ======== 第三方账号绑定 ======== -->
+      <div class="glass form-card">
+        <h2>第三方账号绑定</h2>
+        <div v-for="p in bindProviders" :key="p" class="bind-row">
+          <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
+          <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
+          <button
+            v-if="bound(p)"
+            class="btn-ghost danger"
+            type="button"
+            :disabled="!!binding"
+            @click="unbind(p)"
+          >
+            {{ binding === p ? '解绑中…' : '解除绑定' }}
+          </button>
+          <a
+            v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
+            class="btn-ghost bind-link"
+            :href="`/api/auth/bind/${p}`"
+          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
+          <span v-else class="bind-na">站点未启用</span>
+        </div>
+        <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
+        <p v-if="bindError" class="error-tip">{{ bindError }}</p>
+        <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
+      </div>
     </section>
   </main>
 </template>
@@ -273,6 +331,67 @@ async function refreshOAuthAvatar(provider?: 'github' | 'google') {
     profileError.value = errMsg(e);
   } finally {
     refreshingAvatar.value = false;
+  }
+}
+
+// ===== 第 63 轮：修改/设置密码 =====
+const pwCurrent = ref('');
+const pwNew = ref('');
+const pwConfirm = ref('');
+const pwError = ref('');
+const pwNotice = ref('');
+const savingPw = ref(false);
+async function savePassword() {
+  pwError.value = '';
+  pwNotice.value = '';
+  if (pwNew.value.length < 6) {
+    pwError.value = '新密码至少 6 位';
+    return;
+  }
+  if (pwNew.value !== pwConfirm.value) {
+    pwError.value = '两次输入的新密码不一致';
+    return;
+  }
+  savingPw.value = true;
+  try {
+    const { data } = await http.put<{ user: any; message: string }>('/auth/password', {
+      currentPassword: auth.user?.has_password ? pwCurrent.value : undefined,
+      newPassword: pwNew.value,
+    });
+    if (data.user) auth.user = data.user;
+    pwNotice.value = data.message || '密码已更新';
+    pwCurrent.value = '';
+    pwNew.value = '';
+    pwConfirm.value = '';
+  } catch (e) {
+    pwError.value = errMsg(e);
+  } finally {
+    savingPw.value = false;
+  }
+}
+
+// ===== 第 63 轮：第三方账号绑定/解绑 =====
+const bindProviders = ['github', 'google'] as const;
+type BindProvider = (typeof bindProviders)[number];
+function bound(p: BindProvider) {
+  return p === 'github' ? !!auth.user?.github_id : !!auth.user?.google_id;
+}
+const binding = ref<'' | BindProvider>('');
+const bindNotice = ref('');
+const bindError = ref('');
+async function unbind(p: BindProvider) {
+  if (binding.value) return;
+  binding.value = p;
+  bindNotice.value = '';
+  bindError.value = '';
+  try {
+    const { data } = await http.delete<{ user: any; message: string }>(`/auth/oauth/${p}`);
+    if (data.user) auth.user = data.user;
+    bindNotice.value = data.message || '已解绑';
+  } catch (e) {
+    bindError.value = errMsg(e);
+  } finally {
+    binding.value = '';
   }
 }
 
@@ -586,5 +705,52 @@ onMounted(async () => {
 .notice {
   font-size: 13px;
   color: var(--accent);
+}
+
+/* ===== 第三方绑定行 ===== */
+.bind-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 0;
+  border-bottom: 1px dashed var(--border, rgba(255, 255, 255, 0.1));
+}
+.bind-row:last-of-type {
+  border-bottom: none;
+}
+.bind-name {
+  min-width: 72px;
+  font-weight: 600;
+  font-size: 14px;
+}
+.bind-state {
+  font-size: 12.5px;
+  padding: 2px 10px;
+  border-radius: 999px;
+}
+.bind-state.on {
+  color: #34d399;
+  background: rgba(52, 211, 153, 0.12);
+}
+.bind-state.off {
+  color: var(--text-3, rgba(255, 255, 255, 0.5));
+  background: rgba(255, 255, 255, 0.06);
+}
+.bind-row .btn-ghost {
+  margin-left: auto;
+}
+.bind-row a.bind-link {
+  text-decoration: none;
+  margin-left: auto;
+}
+.bind-na {
+  margin-left: auto;
+  font-size: 12.5px;
+  color: var(--text-3, rgba(255, 255, 255, 0.5));
+}
+.field-hint {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-3, rgba(255, 255, 255, 0.5));
 }
 </style>
