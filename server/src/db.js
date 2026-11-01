@@ -47,7 +47,7 @@ CREATE TABLE IF NOT EXISTS email_codes (
   id BIGINT AUTO_INCREMENT PRIMARY KEY,
   email VARCHAR(255) NOT NULL,
   code VARCHAR(6) NOT NULL,
-  purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login',
+  purpose ENUM('login','register','bind','reset','change-password') NOT NULL DEFAULT 'login',
   expires_at DATETIME NOT NULL,
   used TINYINT(1) NOT NULL DEFAULT 0,
   created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
@@ -97,7 +97,8 @@ export async function initDatabase() {
   await ensureColumn('users', 'permissions', 'permissions JSON NULL AFTER bio');
   await ensureColumn('users', 'google_id', 'google_id VARCHAR(255) NULL UNIQUE AFTER github_id');
   await ensureColumn('users', 'remote_avatar_url', 'remote_avatar_url VARCHAR(500) NULL AFTER avatar_url');
-  await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset') NOT NULL DEFAULT 'login'").catch(() => {});
+  // 老库补枚举值：登录态改密验证码（幂等，每次启动重放同一句 MODIFY 即可）
+  await pool.query("ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset','change-password') NOT NULL DEFAULT 'login'").catch((e) => console.warn('[db] email_codes purpose 枚举迁移失败:', e?.message || e));
   // 彻底删除历史「已注销」存量行（含级联文章），再把 status 枚举回退为两态
   await pool.query("DELETE FROM users WHERE status = 'deleted'").catch(() => {});
   await pool.query("ALTER TABLE users MODIFY COLUMN status ENUM('active','disabled') NOT NULL DEFAULT 'active'").catch(() => {});

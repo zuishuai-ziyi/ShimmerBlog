@@ -89,6 +89,48 @@
           <label>邮箱</label>
           <input :value="auth.user?.email || '（未绑定）'" disabled />
         </div>
+
+        <!-- 修改/设置密码：点开弹窗，用邮箱验证码改密 -->
+        <div class="pw-entry-wrap">
+          <button class="pw-entry" type="button" :disabled="!auth.user?.email" @click="openChangePassword">
+            <span class="pw-entry-main">
+              <span class="pw-entry-title">{{ auth.user?.has_password ? '修改密码' : '设置密码' }}</span>
+              <span class="pw-entry-desc">
+                {{ auth.user?.has_password ? '通过邮箱验证码重设登录密码' : '通过邮箱验证码设置登录密码' }}
+              </span>
+            </span>
+            <span class="pw-entry-arrow" aria-hidden="true">→</span>
+          </button>
+          <p v-if="!auth.user?.email" class="field-hint">当前账号未绑定邮箱，绑定邮箱后才能修改密码。</p>
+        </div>
+
+        <!-- ======== 第三方账号绑定（个人资料卡内小节） ======== -->
+        <section class="bind-section">
+          <h3 class="bind-title">第三方账号绑定</h3>
+          <div v-for="p in bindProviders" :key="p" class="bind-row">
+            <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
+            <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
+            <button
+              v-if="bound(p)"
+              class="btn-ghost danger"
+              type="button"
+              :disabled="!!binding"
+              @click="unbind(p)"
+            >
+              {{ binding === p ? '解绑中…' : '解除绑定' }}
+            </button>
+            <a
+              v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
+              class="btn-ghost bind-link"
+              :href="`/api/auth/bind/${p}`"
+            >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
+            <span v-else class="bind-na">站点未启用</span>
+          </div>
+          <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
+          <p v-if="bindError" class="error-tip">{{ bindError }}</p>
+          <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
+        </section>
+
         <p v-if="profileError" class="error-tip">{{ profileError }}</p>
         <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
         <div class="form-actions">
@@ -98,64 +140,8 @@
       </form>
       <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
       <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
-
-      <!-- ======== 账号安全：修改/设置密码 ======== -->
-      <form class="glass form-card" @submit.prevent="savePassword">
-        <h2>账号安全</h2>
-        <div class="field">
-          <label>当前密码</label>
-          <input
-            v-if="auth.user?.has_password"
-            v-model="pwCurrent"
-            type="password"
-            autocomplete="current-password"
-            placeholder="输入当前密码"
-          />
-          <p v-else class="field-hint">当前账号未设置密码（第三方登录注册）。设置后可使用「邮箱 + 密码」登录。</p>
-        </div>
-        <div class="field">
-          <label>新密码</label>
-          <input v-model="pwNew" type="password" autocomplete="new-password" placeholder="至少 6 位" />
-        </div>
-        <div class="field">
-          <label>确认新密码</label>
-          <input v-model="pwConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码" />
-        </div>
-        <p v-if="pwError" class="error-tip">{{ pwError }}</p>
-        <p v-if="pwNotice" class="notice">{{ pwNotice }}</p>
-        <div class="form-actions">
-          <button class="btn" type="submit" :disabled="savingPw">
-            {{ savingPw ? '保存中…' : auth.user?.has_password ? '修改密码' : '设置密码' }}
-          </button>
-        </div>
-      </form>
-
-      <!-- ======== 第三方账号绑定 ======== -->
-      <div class="glass form-card">
-        <h2>第三方账号绑定</h2>
-        <div v-for="p in bindProviders" :key="p" class="bind-row">
-          <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
-          <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
-          <button
-            v-if="bound(p)"
-            class="btn-ghost danger"
-            type="button"
-            :disabled="!!binding"
-            @click="unbind(p)"
-          >
-            {{ binding === p ? '解绑中…' : '解除绑定' }}
-          </button>
-          <a
-            v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
-            class="btn-ghost bind-link"
-            :href="`/api/auth/bind/${p}`"
-          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
-          <span v-else class="bind-na">站点未启用</span>
-        </div>
-        <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
-        <p v-if="bindError" class="error-tip">{{ bindError }}</p>
-        <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
-      </div>
+      <!-- 修改/设置密码弹窗：同样放在本 section 内（否则资料页切走后不渲染） -->
+      <ChangePasswordDialog v-model:open="changePasswordOpen" @success="onPasswordChanged" />
     </section>
   </main>
 </template>
@@ -167,8 +153,10 @@ import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
+import ChangePasswordDialog from '../components/ChangePasswordDialog.vue';
 import { formatDateTime } from '../utils/format';
 import type { ArticleBrief } from '../types';
+import type { User } from '../stores/auth';
 import bundledAvatar from '../assets/default-avatar.svg';
 import ArticleEditor from '../components/ArticleEditor.vue';
 
@@ -334,40 +322,19 @@ async function refreshOAuthAvatar(provider?: 'github' | 'google') {
   }
 }
 
-// ===== 第 63 轮：修改/设置密码 =====
-const pwCurrent = ref('');
-const pwNew = ref('');
-const pwConfirm = ref('');
-const pwError = ref('');
-const pwNotice = ref('');
-const savingPw = ref(false);
-async function savePassword() {
-  pwError.value = '';
-  pwNotice.value = '';
-  if (pwNew.value.length < 6) {
-    pwError.value = '新密码至少 6 位';
-    return;
-  }
-  if (pwNew.value !== pwConfirm.value) {
-    pwError.value = '两次输入的新密码不一致';
-    return;
-  }
-  savingPw.value = true;
-  try {
-    const { data } = await http.put<{ user: any; message: string }>('/auth/password', {
-      currentPassword: auth.user?.has_password ? pwCurrent.value : undefined,
-      newPassword: pwNew.value,
-    });
-    if (data.user) auth.user = data.user;
-    pwNotice.value = data.message || '密码已更新';
-    pwCurrent.value = '';
-    pwNew.value = '';
-    pwConfirm.value = '';
-  } catch (e) {
-    pwError.value = errMsg(e);
-  } finally {
-    savingPw.value = false;
-  }
+// ===== 修改/设置密码：弹窗内用邮箱验证码改密（逻辑在 ChangePasswordDialog.vue） =====
+const changePasswordOpen = ref(false);
+/** 未绑定邮箱时无法用验证码改密（按钮已禁用，这里再挡一道） */
+function openChangePassword() {
+  if (!auth.user?.email) return;
+  profileError.value = '';
+  changePasswordOpen.value = true;
+}
+/** 弹窗内改密成功：同步登录态并在卡片底部提示（文案取后端 message，区分「已修改」/「已设置」） */
+function onPasswordChanged(user: User | null, message?: string) {
+  if (user) auth.user = user;
+  profileError.value = '';
+  profileNotice.value = message || '密码已修改';
 }
 
 // ===== 第 63 轮：第三方账号绑定/解绑 =====
@@ -707,13 +674,100 @@ onMounted(async () => {
   color: var(--accent);
 }
 
+/* ===== 修改密码入口（邮箱栏下方，点开弹窗） ===== */
+.pw-entry-wrap {
+  display: grid;
+  gap: 6px;
+}
+
+.pw-entry {
+  width: 100%;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 14px;
+  text-align: left;
+  color: var(--text);
+  background: var(--accent-faint);
+  border: 1px solid var(--glass-border);
+  border-radius: 12px; /* 与卡内输入框圆角一致 */
+  transition: background 0.25s ease, border-color 0.25s ease;
+}
+
+/* 悬停只变色不位移（与站内胶囊按钮一致） */
+.pw-entry:hover:not(:disabled) {
+  background: rgba(140, 198, 226, 0.14);
+  border-color: rgba(140, 198, 226, 0.55);
+}
+
+.pw-entry:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
+}
+
+.pw-entry-main {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-width: 0;
+}
+
+.pw-entry-title {
+  font-size: 14px;
+  font-weight: 600;
+}
+
+.pw-entry-desc {
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.pw-entry-arrow {
+  margin-left: auto;
+  flex: none;
+  font-size: 14px;
+  color: var(--accent);
+  transition: color 0.25s ease;
+}
+
+.pw-entry:hover:not(:disabled) .pw-entry-arrow {
+  color: #ffffff;
+}
+
+/* ===== 卡内第三方绑定小节 ===== */
+.bind-section {
+  display: grid;
+  gap: 10px;
+  padding-top: 14px;
+  /* 直接写实值：前台没有定义 --border（仅 AdminView 局部有），var() 永远走 fallback */
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
+}
+
+/* 小节标题：字号降一档，右侧细线与卡内层级呼应 */
+.bind-title {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13.5px;
+  font-weight: 600;
+  color: var(--accent);
+}
+
+.bind-title::after {
+  content: '';
+  flex: 1;
+  height: 1px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
 /* ===== 第三方绑定行 ===== */
 .bind-row {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  border-bottom: 1px dashed var(--border, rgba(255, 255, 255, 0.1));
+  /* 同上：--border 前台未定义，直接写实值 */
+  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
 }
 .bind-row:last-of-type {
   border-bottom: none;
@@ -729,15 +783,32 @@ onMounted(async () => {
   border-radius: 999px;
 }
 .bind-state.on {
-  color: #34d399;
+  /* 与站内既有绿（.dot.published）统一 */
+  color: #63e6be;
   background: rgba(52, 211, 153, 0.12);
 }
 .bind-state.off {
-  color: var(--text-3, rgba(255, 255, 255, 0.5));
+  /* 前台未定义 --text-3（仅 AdminView 局部有），直接写实值 */
+  color: rgba(255, 255, 255, 0.5);
   background: rgba(255, 255, 255, 0.06);
 }
 .bind-row .btn-ghost {
   margin-left: auto;
+}
+/* 解绑按钮：与「退出登录」同族的危险色 */
+.bind-row .btn-ghost.danger {
+  color: #ff9b9b;
+  background: rgba(255, 138, 138, 0.1);
+  border-color: rgba(255, 138, 138, 0.32);
+  transition: background 0.25s ease, border-color 0.25s ease, color 0.25s ease;
+}
+.bind-row .btn-ghost.danger:hover:not(:disabled) {
+  background: rgba(255, 138, 138, 0.18);
+  border-color: rgba(255, 138, 138, 0.5);
+}
+.bind-row .btn-ghost:disabled {
+  opacity: 0.55;
+  cursor: not-allowed;
 }
 .bind-row a.bind-link {
   text-decoration: none;
@@ -746,11 +817,13 @@ onMounted(async () => {
 .bind-na {
   margin-left: auto;
   font-size: 12.5px;
-  color: var(--text-3, rgba(255, 255, 255, 0.5));
+  /* 前台未定义 --text-3，直接写实值 */
+  color: rgba(255, 255, 255, 0.5);
 }
 .field-hint {
   font-size: 12.5px;
   line-height: 1.6;
-  color: var(--text-3, rgba(255, 255, 255, 0.5));
+  /* 前台未定义 --text-3，直接写实值 */
+  color: rgba(255, 255, 255, 0.5);
 }
 </style>

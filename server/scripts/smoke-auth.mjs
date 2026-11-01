@@ -3,11 +3,18 @@
  * 覆盖：注册→登录→/api/me→验证码登录→GitHub 占位→头像上传→资料修改→第三方头像同步
  */
 import { pool } from '../src/db.js';
+import { signToken } from '../src/utils.js';
 
-const B = 'http://localhost:3010/api/auth';
+// API 基址：默认本机 3010；回归到独立测试实例时用 SB_BASE 覆盖（形如 http://127.0.0.1:3013/api）
+const API_BASE = (process.env.SB_BASE || 'http://localhost:3010/api').replace(/\/+$/, '');
+const B = `${API_BASE}/auth`;
+const ORIGIN = API_BASE.replace(/\/api$/, '');
 /** 直查 DB 取最新验证码（SMTP 已配置时不返回 devCode，这是唯一稳定取码途径） */
-async function latestCode(email) {
-  const [rows] = await pool.query('SELECT code FROM email_codes WHERE email = ? ORDER BY id DESC LIMIT 1', [email]);
+async function latestCode(email, purpose) {
+  const sql = purpose
+    ? 'SELECT code FROM email_codes WHERE email = ? AND purpose = ? ORDER BY id DESC LIMIT 1'
+    : 'SELECT code FROM email_codes WHERE email = ? ORDER BY id DESC LIMIT 1';
+  const [rows] = await pool.query(sql, purpose ? [email, purpose] : [email]);
   return rows[0]?.code;
 }
 const MAIL = `tester-${Date.now()}@shimmer.dev`;
@@ -97,7 +104,7 @@ r = await fetch(`${B}/avatar`, { method: 'POST', headers: { Authorization: `Bear
 body = await r.json().catch(() => ({}));
 ok('avatar upload', r.status === 200 && body.url?.startsWith('/uploads/avatars/'), `${r.status} ${body.error ?? body.url ?? ''}`);
 if (body.url) {
-  const img = await fetch(`http://localhost:3010${body.url}`);
+  const img = await fetch(`${ORIGIN}${body.url}`);
   ok('avatar served', img.status === 200 && (img.headers.get('content-type') ?? '').includes('image/png'));
 }
 
@@ -126,7 +133,7 @@ ok('avatar refresh 后 user.avatar_url 为本站链接', r.status === 200 && bod
 if (r.status === 200) {
   const [urows] = await pool.query('SELECT avatar_url, remote_avatar_url FROM users WHERE email = ?', [MAIL]);
   ok('avatar refresh 后 remote_avatar_url 已记录', urows[0]?.avatar_url === body.url && String(urows[0]?.remote_avatar_url || '').includes('avatars.githubusercontent.com'));
-  const img = await fetch(`http://localhost:3010${body.url}`);
+  const img = await fetch(`${ORIGIN}${body.url}`);
   ok('avatar refresh 文件可访问', img.status === 200 && (img.headers.get('content-type') ?? '').startsWith('image/'));
 }
 
@@ -233,8 +240,66 @@ r = await fetch(`${B}/oauth/google`, { method: 'DELETE', headers: { Authorizatio
 body = await r.json().catch(() => ({}));
 ok('oauth 解绑成功 200', r.status === 200 && body.message === '已解绑' && body.user?.google_id === null, `${r.status} ${body.error ?? body.message ?? ''}`);
 
+// ===== 第 64 轮：登录态下凭邮箱验证码修改密码（purpose='change-password'） =====
+// 契约：发码必须带登录态且邮箱与当前账号一致；改密接口带 code 时忽略当前密码、只认邮箱验证码。
+// 注意：用独立账号（本轮新建 cpMail），避免与第 63 轮共用账号触发 passwordChangeLimiter（15 分钟 5 次）。
+const cpMail = `chgpw-${Date.now()}@shimmer.dev`;
+r = await post('/send-code', { email: cpMail, purpose: 'register' });
+const cpRegCode = (await r.json().catch(() => ({}))).devCode ?? (await latestCode(cpMail, 'register'));
+r = await post('/register', { email: cpMail, password: 'cp-old-123', name: '验证码改密用户', code: cpRegCode });
+const cpT = (await r.json().catch(() => ({}))).token;
+ok('chgpw register 201', r.status === 201 && !!cpT, String(r.status));
+
+// a) 未登录发码 → 401
+r = await post('/send-code', { email: cpMail, purpose: 'change-password' });
+body = await r.json().catch(() => ({}));
+ok('change-password 发码未登录 401', r.status === 401 && body.error === '未登录', `${r.status} ${body.error ?? ''}`);
+
+// b) 登录后用他人邮箱发码 → 403
+const cpOtherMail = `chgpw-other-${Date.now()}@shimmer.dev`;
+r = await post('/send-code', { email: cpOtherMail, purpose: 'change-password' }, cpT);
+body = await r.json().catch(() => ({}));
+ok('change-password 发码邮箱不匹配 403', r.status === 403 && body.error === '邮箱与当前账号不匹配', `${r.status} ${body.error ?? ''}`);
+
+// c) 给自己发码 → 200
+r = await post('/send-code', { email: cpMail, purpose: 'change-password' }, cpT);
+body = await r.json().catch(() => ({}));
+ok('change-password 发码 200', r.status === 200 && body.sent === true, `${r.status} ${body.error ?? ''}`);
+
+// d) 取码（直查 DB，不依赖 SMTP/devCode）
+const cpCode = body.devCode ?? (await latestCode(cpMail, 'change-password'));
+ok('change-password 验证码已入库', !!cpCode, String(cpCode));
+
+// e) 错验证码 → 401
+const cpWrongCode = String((Number(cpCode) + 1) % 1000000).padStart(6, '0');
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cpT}` }, body: JSON.stringify({ code: cpWrongCode, newPassword: 'cp-new-456' }) });
+body = await r.json().catch(() => ({}));
+ok('change-password 错验证码 401', r.status === 401 && body.error === '验证码错误或已过期', `${r.status} ${body.error ?? ''}`);
+
+// f) 正确验证码改密（不传 currentPassword）→ 200，且新密码可登录、旧密码失效
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cpT}` }, body: JSON.stringify({ code: cpCode, newPassword: 'cp-new-456' }) });
+body = await r.json().catch(() => ({}));
+ok('change-password 对码改密 200', r.status === 200 && body.message === '密码已修改' && body.user?.has_password === true, `${r.status} ${body.error ?? body.message ?? ''}`);
+r = await post('/login', { email: cpMail, password: 'cp-new-456' });
+ok('change-password 新密码登录 200', r.status === 200);
+r = await post('/login', { email: cpMail, password: 'cp-old-123' });
+ok('change-password 旧密码失效 401', r.status === 401);
+
+// g) 同一验证码重放 → 401
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cpT}` }, body: JSON.stringify({ code: cpCode, newPassword: 'cp-new-789' }) });
+body = await r.json().catch(() => ({}));
+ok('change-password 验证码重放 401', r.status === 401 && body.error === '验证码错误或已过期', `${r.status} ${body.error ?? ''}`);
+
+// h) 未绑定邮箱的账号（OAuth-only）→ 400
+const [cpNoMailIns] = await pool.query("INSERT INTO users (email, name) VALUES (NULL, '无邮箱用户')");
+const cpNoMailT = signToken({ id: cpNoMailIns.insertId });
+r = await fetch(`${B}/password`, { method: 'PUT', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${cpNoMailT}` }, body: JSON.stringify({ code: '123456', newPassword: 'cp-none-123' }) });
+body = await r.json().catch(() => ({}));
+ok('change-password 未绑定邮箱 400', r.status === 400 && body.error === '当前账号未绑定邮箱', `${r.status} ${body.error ?? ''}`);
+await pool.query('DELETE FROM users WHERE id = ?', [cpNoMailIns.insertId]);
+
 // 清理本脚本创建的测试用户（不留终态数据；否则每次回归都会新建同名用户，用户会看到「已删用户又出现」）
-await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail, bothMail, pwMail]]);
+await pool.query('DELETE FROM users WHERE email IN (?)', [[MAIL, magicMail, syncMail, bothMail, pwMail, cpMail]]);
 
 console.log(`\n== ${pass} pass, ${fail} fail ==`);
 process.exit(fail ? 1 : 0);

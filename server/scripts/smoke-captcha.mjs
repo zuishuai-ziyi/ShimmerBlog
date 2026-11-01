@@ -152,6 +152,7 @@ r = await req('POST', '/auth/send-code', { body: { email: MAIL2, purpose: 'regis
 const code2 = r.data.devCode || (await latestCode(MAIL2, 'register'));
 r = await req('POST', '/auth/register', { body: { email: MAIL2, password: 'pass123456', name: 'x2', code: code2, captcha: good() } });
 ok('注册带验证码（兑底）201', r.status === 201, JSON.stringify(r.data));
+const token2 = (r.data || {}).token || ''; // 供登录态改密发码用例使用
 ok('测试用户 token 就绪', !!token);
 
 // 携带错误验证码且无信用 → 直接回验证错误（不吃信用）
@@ -241,6 +242,14 @@ mode = 'down';
 r = await req('POST', '/auth/send-code', { body: { email: MAIL, purpose: 'reset', captcha: good() } });
 ok('验证码服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
+
+/* ---------- 登录态改密发码（purpose='change-password'）：行为验证码仍生效，另需登录态 + 邮箱与账号一致 ---------- */
+r = await req('POST', '/auth/send-code', { body: { email: MAIL2, purpose: 'change-password', captcha: good() } });
+ok('change-password 发码未登录 401', r.status === 401 && /未登录/.test(r.data.error || ''), JSON.stringify(r.data));
+r = await req('POST', '/auth/send-code', { token: token2, body: { email: MAIL, purpose: 'change-password', captcha: good() } });
+ok('change-password 发码邮箱不匹配 403', r.status === 403 && /邮箱与当前账号不匹配/.test(r.data.error || ''), JSON.stringify(r.data));
+r = await req('POST', '/auth/send-code', { token: token2, body: { email: MAIL2, purpose: 'change-password', captcha: good() } });
+ok('change-password 发码登录态 200', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
 
 /* ---------- reCAPTCHA v2 勾选框（provider 切换 + siteverify mock） ---------- */
 rcSecret = `rc-secret-${Date.now()}`;

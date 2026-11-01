@@ -674,3 +674,23 @@
   - `views/AdminView.vue`：「行为验证码」页三选一（gocaptcha 点选 / **tianai 天爱滑块（自建 tianai-captcha）** / recaptcha）；tianai 分支只需填服务地址（placeholder `https://tianai-captcha.xiaoziyi.com`）+ 可选内部校验地址（同机 `http://127.0.0.1:21001`）。
 - **测试**：smoke-captcha +9 → **48/0**（tianai 段：provider 切换与 /site 下发、send-code 带 key 通过二次验证、缺 key 400、check2 未通过 400、通过后到密码校验 401、同 id 重放 400、服务不可用 502、还原配置）；`npm run build`（vue-tsc）通过。
 - **回归环境**：本机 Windows 第二 mysqld 实例（`%LOCALAPPDATA%\MySQLSmoke`，端口 3307，`--initialize-insecure`，建 `shimmerblog` 库 + `smoke`@`%` 用户）+ `tmp/run-smoke.ps1`（node.exe 起 server + 跑 smoke，环境变量注入 DB）。
+
+## 65. 登录态下凭邮箱验证码修改密码（purpose='change-password'）
+- **契约**（前端按此对接）：
+  - `POST /api/auth/send-code` 新增 `purpose='change-password'`：必须携带有效登录态（Bearer token），且 `body.email`（小写归一化）=== 当前账号邮箱；否则未登录 401「未登录」、邮箱不匹配 403「邮箱与当前账号不匹配」。邮箱需已注册且 `status='active'`（与 `reset` 分支同一套检查：未注册 404「该邮箱尚未注册」、已禁用 403「账号已被禁用」）。发码逻辑与其它 purpose 一致（6 位、10 分钟、写 `email_codes`），响应 `{ sent, via, devCode? }`，行为验证码挂载不变。
+  - `PUT /api/auth/password` 新增可选 `code` 字段：携带非空 `code` 时走验证码分支（**完全忽略 `currentPassword`**）——账号未绑定邮箱（OAuth-only）400「当前账号未绑定邮箱」；查码 `email=当前账号邮箱 AND code=? AND purpose='change-password' AND used=0 AND expires_at>NOW() ORDER BY id DESC LIMIT 1`，无命中 401「验证码错误或已过期」，命中即 `UPDATE email_codes SET used=1`（一次性，防重放）。密码仍走 6–100 位校验 + `bcrypt.hash(password,10)` + `UPDATE users SET password_hash=?`（不动 `email_verified`），返回 `{ user, message }`，`message` 沿用「密码已修改」/「密码已设置」判定（原 `password_hash` 存不存在）。不传 `code` 时行为与原来完全一致（旧用例零改动）。
+- **后端改动**：
+  - `server/src/routes/auth.js`：
+    - 顶部新增 `import jwt from 'jsonwebtoken'`。
+    - 新增可选登录态辅助 `currentUser(req)`（放在 `codeLimiter` 之后）：解析 `Authorization: Bearer` → `jwt.verify(config.jwtSecret)` → 查 `users` → 返回 `{ ok:true, user }` 或 `{ ok:false, status, error }`（未登录 401 / 令牌失效 401 / 账号不存在或非 active 403）。**send-code 不能整体挂 `authRequired`**（会破坏注册/忘记密码），故只在 `purpose==='change-password'` 分支内手动校验。
+    - `POST /send-code`：`purpose` 白名单改为显式四分支（`reset` / `register` / `change-password` / 兜底 `login`——旧实现未知值会静默降级为 `login`，现在 `change-password` 有独立分支）；新增 change-password 分支做登录态 + 邮箱一致性校验；`reset` 与 `change-password` 共用「已注册且 active」检查。
+    - `PUT /password`：`req.body` 解构增加 `code`；新增验证码分支（未绑定邮箱 400 → 查码 → 401 → 置 `used=1`），原 `currentPassword` 分支逐字保留。
+  - `server/src/db.js`：`email_codes.purpose` 枚举加 `'change-password'`——建表语句 `SCHEMA_SQL` 与老库迁移 `ALTER TABLE email_codes MODIFY COLUMN purpose ENUM('login','register','bind','reset','change-password') NOT NULL DEFAULT 'login'` 两处都改（迁移每次启动重放同一句 MODIFY，幂等）。
+- **前端改动**：
+  - `web/src/components/ChangePasswordDialog.vue`（新建）：修改/设置密码弹窗——「邮箱验证码 + 新密码 + 确认密码」提交 `PUT /auth/password`（带 `code`，无需当前密码）；发码走 `POST /auth/send-code { email, purpose: 'change-password' }`，站点开启行为验证时先弹 CaptchaDialog 验证再发码、后端回 `CAPTCHA_REQUIRED` 时补弹一次（验证通过自动重试）；与 CaptchaDialog 同一套开合行为（原生 `<dialog>` + `show()` 非模态 + 自绘遮罩 + 页面滚动锁定 + Esc 关闭——不用 `showModal()` 是因为顶层会压过 Google 挑战弹层（z-index ≈ 2e9）导致挑战图被遮挡）；校验（6 位验证码 / 密码 ≥6 位 / 两次一致）全在前端做，失败信息就地展示在表单内；成功后展示后端 `message` 并约 1s 自动关闭（重开弹窗时清理该定时器）；重发按钮 60s 倒计时跨「关窗→重开」保留（防滥用）；`success` 事件带后端文案 `emit('success', user, message)`，由调用方展示以区分「密码已修改」/「密码已设置」。
+  - `web/src/views/ConsoleView.vue`：删掉原个人资料 tab 的「账号安全」卡（改密表单整体迁入弹窗），邮箱栏下方改为「修改/设置密码」入口按钮（`has_password` 决定文案，未绑定邮箱时禁用并给出提示）；原独立的「第三方账号绑定」卡并入个人资料卡内小节（`.bind-section` / `.bind-row`：GitHub/Google 绑定状态徽标、解绑按钮 `DELETE /auth/oauth/:p`、未绑定且站点启用时「绑定」链接走 `/api/auth/bind/:p`、站点未启用时显示「站点未启用」占位）。
+- **测试**：
+  - `server/scripts/smoke-auth.mjs`：第 63 轮之后新增「第 64 轮：登录态下凭邮箱验证码修改密码」——未登录发码 401 / 他人邮箱发码 403 / 自己邮箱发码 200 / 取码（`latestCode(email,'change-password')` 直查 DB）/ 错码改密 401 / 对码改密 200（`message==='密码已修改'`）+ 新密码登录 200 + 旧密码失效 401 / 同码重放 401 / 未绑定邮箱账号 400；独立账号 `chgpw-*` 避免与第 63 轮共用账号触发 `passwordChangeLimiter`（15 分钟 5 次）。脚本 base 地址改为读 `SB_BASE`（默认仍 `http://localhost:3010/api`），头像图片断言同步走 `ORIGIN`。
+  - `server/scripts/smoke-captcha.mjs`：新增 3 条——change-password 发码未登录 401 / 登录态但邮箱不匹配 403 / 登录态 + 邮箱一致 200（行为验证码仍生效）。
+  - 一键回归脚本 `tmp/run-pw-smoke.ps1`（+ 辅助 `tmp/pw-smoke-helper.mjs`）：在**独立端口 3013** 起测试实例（不碰用户的 3010 dev server）、备份并临时关闭行为验证码开关后跑 `smoke-auth`（可选 `smoke-captcha`）、结束后**只按端口** `Get-NetTCPConnection -LocalPort <端口> | Stop-Process -Id <owner>` 清理并还原配置。
+- **遗留**：实际跑通结果（smoke-auth / smoke-captcha 用例数与失败数）以本次任务回报为准，本节只记录实现与用例清单。

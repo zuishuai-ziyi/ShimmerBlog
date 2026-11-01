@@ -1,6 +1,7 @@
 import { Router } from 'express';
 import crypto from 'node:crypto';
 import bcrypt from 'bcryptjs';
+import jwt from 'jsonwebtoken';
 import { pool } from '../db.js';
 import { config } from '../config.js';
 import { authRequired } from '../middleware/auth.js';
@@ -159,11 +160,39 @@ const codeLimiter = makeLimiter({
   message: '验证码发送过于频繁，每小时最多 5 次',
 });
 
+/**
+ * 可选登录态：解析 Bearer JWT 并加载用户（不写响应），返回 { ok:true, user } 或 { ok:false, status, error }。
+ * send-code 同时服务注册/找回密码（无需登录态），不能直接挂 authRequired，
+ * 只有 purpose='change-password' 的分支需要在处理器内单独校验登录态。
+ */
+async function currentUser(req) {
+  const header = req.headers.authorization || '';
+  const token = header.startsWith('Bearer ') ? header.slice(7) : null;
+  if (!token) return { ok: false, status: 401, error: '未登录' };
+  let payload;
+  try {
+    payload = jwt.verify(token, config.jwtSecret);
+  } catch {
+    return { ok: false, status: 401, error: '登录已过期，请重新登录' };
+  }
+  const [rows] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [payload.uid]);
+  const user = rows[0];
+  if (!user || user.status !== 'active') return { ok: false, status: 403, error: '账号不可用' };
+  return { ok: true, user };
+}
+
 authRouter.post('/send-code', codeLimiter, captchaGuard, async (req, res, next) => {
   try {
     const { email } = req.body ?? {};
     const rawPurpose = req.body?.purpose;
-    const purpose = rawPurpose === 'reset' ? 'reset' : rawPurpose === 'register' ? 'register' : 'login';
+    const purpose =
+      rawPurpose === 'reset'
+        ? 'reset'
+        : rawPurpose === 'register'
+          ? 'register'
+          : rawPurpose === 'change-password'
+            ? 'change-password'
+            : 'login';
     if (!EMAIL_RE.test(String(email ?? ''))) return res.status(400).json({ error: '邮箱格式不正确' });
     const mail = String(email).toLowerCase();
     if (purpose === 'register') {
@@ -171,8 +200,16 @@ authRouter.post('/send-code', codeLimiter, captchaGuard, async (req, res, next) 
       const [u] = await pool.query('SELECT id FROM users WHERE email = ? LIMIT 1', [mail]);
       if (u.length > 0) return res.status(409).json({ error: '该邮箱已注册' });
     }
-    if (purpose === 'reset') {
-      // 找回密码：仅向已注册且未被禁用的邮箱发码，同时不暴露邮箱是否存在以外的信息
+    if (purpose === 'change-password') {
+      // 登录态改密发码：必须携带有效登录态，且只能发到当前账号自己的邮箱
+      const me = await currentUser(req);
+      if (!me.ok) return res.status(me.status).json({ error: me.error });
+      if (mail !== String(me.user.email ?? '').toLowerCase()) {
+        return res.status(403).json({ error: '邮箱与当前账号不匹配' });
+      }
+    }
+    if (purpose === 'reset' || purpose === 'change-password') {
+      // 找回密码 / 登录态改密：仅向已注册且未被禁用的邮箱发码，同时不暴露邮箱是否存在以外的信息
       const [u] = await pool.query('SELECT status FROM users WHERE email = ? LIMIT 1', [mail]);
       if (u.length === 0) return res.status(404).json({ error: '该邮箱尚未注册' });
       if (u[0].status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
@@ -552,7 +589,9 @@ const passwordChangeLimiter = makeLimiter({
 
 authRouter.put('/password', authRequired, passwordChangeLimiter, async (req, res, next) => {
   try {
-    const { currentPassword, newPassword } = req.body ?? {};
+    const { currentPassword, newPassword, code } = req.body ?? {};
+    // 验证码允许字符串或数字形态（前端可能回传 number），空值视为未提供
+    const codeStr = typeof code === 'string' || typeof code === 'number' ? String(code).trim() : '';
     if (typeof newPassword !== 'string' || newPassword.length < 6) {
       return res.status(400).json({ error: '新密码至少 6 位' });
     }
@@ -560,7 +599,19 @@ authRouter.put('/password', authRequired, passwordChangeLimiter, async (req, res
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     const u = rows[0];
     if (!u) return res.status(403).json({ error: '账号不可用' });
-    if (u.password_hash) {
+    if (codeStr) {
+      // 凭邮箱验证码改密（登录态）：完全忽略当前密码
+      const mail = String(u.email ?? '').toLowerCase();
+      if (!mail) return res.status(400).json({ error: '当前账号未绑定邮箱' });
+      const [codes] = await pool.query(
+        `SELECT id FROM email_codes
+         WHERE email = ? AND code = ? AND purpose = 'change-password' AND used = 0 AND expires_at > NOW()
+         ORDER BY id DESC LIMIT 1`,
+        [mail, codeStr]
+      );
+      if (codes.length === 0) return res.status(401).json({ error: '验证码错误或已过期' });
+      await pool.query('UPDATE email_codes SET used = 1 WHERE id = ?', [codes[0].id]);
+    } else if (u.password_hash) {
       if (!currentPassword) return res.status(400).json({ error: '请输入当前密码' });
       const ok = await bcrypt.compare(String(currentPassword ?? ''), u.password_hash);
       if (!ok) return res.status(401).json({ error: '当前密码错误' });

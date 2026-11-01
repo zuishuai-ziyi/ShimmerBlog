@@ -96,7 +96,7 @@ cd ../web && npm run dev
   - GitHub：GitHub → Settings → Developer settings → OAuth Apps，Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`）。
   - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
   - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
-  - **账号绑定与密码**：个人中心「个人资料」页可修改/设置密码（第三方注册用户首设免验当前密码），并管理 GitHub/Google 绑定——未绑定点「绑定」跳第三方授权（回调仅绑定不登录/建号，目标 id 被其他账号占用时报错），已绑定可解绑（解绑后须仍保留密码或另一第三方，避免无法登录）。`users.publicUser.has_password` 标记是否已设密码。
+  - **账号绑定与密码**：个人中心「个人资料」页可修改/设置密码（第三方注册用户首设免验当前密码），并管理 GitHub/Google 绑定——未绑定点「绑定」跳第三方授权（回调仅绑定不登录/建号，目标 id 被其他账号占用时报错），已绑定可解绑（解绑后须仍保留密码或另一第三方，避免无法登录）。`users.publicUser.has_password` 标记是否已设密码。前端把改密做成邮箱栏下方的「修改/设置密码」入口，点开弹窗（`web/src/components/ChangePasswordDialog.vue`）用邮箱验证码改密，第三方绑定小节也并入同一张个人资料卡内。
   - **头像本地化**：第三方登录注册（含邮箱并档）时，服务端后台异步下载第三方头像（不阻塞注册/登录），走与用户上传同规格的校验（png/jpg/gif/webp、≤2MB、魔数嗅探，另加 https 强制、`githubusercontent.com`/`googleusercontent.com`/`ggpht.com` 域名白名单、重定向逐跳复检，跳数上限 0–12 与总超时 1–300 秒后台可配）后转存为本站文件；校验不过则回落默认头像（不影响注册），原始第三方头像地址存 `users.remote_avatar_url`，且每次第三方登录都会刷新（换号重登一次即可更新来源）。绑定过第三方的用户可在个人中心/空间页点「从第三方同步头像」手动重新拉取（GitHub 由用户 id 直接构造公开地址；Google 优先用记录的原始地址，老用户记录缺失时若现有头像仍是白名单域名外链会自动回填当来源；绑定了多个第三方时前端分开按钮让用户选择来源，接口也支持 `body.provider`；每用户 60 秒限频）。历史外链头像用户也可手动同步一键转本站链接。
   - **国内服务器**：直连不了 GitHub/Google API 时，在后台「第三方登录」页填「出站代理」（或环境变量 `OAUTH_PROXY_URL`），令牌换取、用户信息与第三方头像下载请求自动走代理；访客浏览器仍需能自行打开 GitHub / Google 授权页。
   - **VLESS/Reality 节点**：代理字段只认 HTTP(S)/CONNECT 代理，不能直接填 `vless://` 链接——需在应用所在服务器跑一个 sing-box/xray 客户端把节点转成本地 HTTP 端口（sing-box inbound 用 `mixed`，同端口兼 HTTP+SOCKS），再填 `http://127.0.0.1:端口`。线上 198 机现用自建 gost `http://127.0.0.1:3128`（后台已填）。
@@ -121,13 +121,13 @@ cd ../web && npm run dev
 | `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 与 Google 是否可用/行为验证码配置与类型/关于页副标题 aboutSubtitle） |
 | `POST /api/auth/register` | 邮箱 + 密码 + **邮箱验证码**注册（验证码校验通过即视为邮箱已验证） |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
-| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送） |
+| `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset` / `change-password`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送，`change-password` 需登录态且邮箱与当前账号一致，挂行为验证码；未登录 401「未登录」，邮箱与当前账号不符 403「邮箱与当前账号不匹配」） |
 | `POST /api/auth/login/code` | 验证码登录（邮箱不存在则自动注册） |
 | `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
 | `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
 | `GET /api/auth/google` · `/api/auth/google/callback` | Google OAuth（OIDC，未配置返回 501） |
 | `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` · `POST /api/auth/avatar/refresh-oauth` | 当前用户 / 改名 / 换头像 / 从第三方同步头像（绑定过 GitHub/Google 才可用，`body.provider` 可指定来源，60s 限频） |
-| `PUT /api/auth/password` | 修改/设置密码（15 分钟 5 次；已设密码须验 `currentPassword`，未设密码的第三方用户首设免验；`newPassword` 6–100 位） |
+| `PUT /api/auth/password` | 修改/设置密码（15 分钟 5 次；已设密码可验 `currentPassword`，或带邮箱验证码 `code` 免验当前密码（第三方用户首设免验）；带 `code` 时忽略 `currentPassword`：账号未绑定邮箱 400「当前账号未绑定邮箱」，验证码错误/已过期 401「验证码错误或已过期」；`newPassword` 6–100 位，返回 `{ user, message }`） |
 | `GET /api/auth/bind/:provider` · `DELETE /api/auth/oauth/:provider` | 绑定第三方（登录态 302 到授权页，回调仅绑定不登录）/ 解绑（解绑后须仍保留密码或另一第三方可登录） |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |
 | `GET /api/articles/:id` | 文章详情（草稿仅作者或管理员可见） |
