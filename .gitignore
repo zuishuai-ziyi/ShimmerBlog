@@ -19,3 +19,6 @@ Thumbs.db
 # 运行时上传文件（服务启动时会自动重建目录）
 server/uploads/*
 !server/uploads/.gitkeep
+
+# 本地临时文件（调试脚本等）
+tmp/
