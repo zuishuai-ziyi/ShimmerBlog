@@ -92,13 +92,14 @@
               <h2>行为验证码</h2>
               <p class="hint">
                 启用后，登录、注册、发送邮件验证码、发布文章、上传图片、修改资料与后台登录均需先完成验证。
-                支持 GoCaptcha 点选（自建 go-captcha-service）与 Google reCAPTCHA v2 勾选框（官方国内镜像 recaptcha.net，大陆可达）。
+                支持 GoCaptcha 点选（自建 go-captcha-service）、天爱滑块（自建 tianai-captcha）与 Google reCAPTCHA v2 勾选框（官方国内镜像 recaptcha.net，大陆可达）。
               </p>
               <label class="row check"><input type="checkbox" v-model="captchaEnabledBool" /><span>启用行为验证码</span></label>
               <label class="row">
                 <span>验证服务</span>
                 <select v-model="captchaForm.captcha_provider">
                   <option value="gocaptcha">GoCaptcha 点选（自建服务）</option>
+                  <option value="tianai">天爱滑块（自建 tianai-captcha）</option>
                   <option value="recaptcha">Google reCAPTCHA v2 勾选框</option>
                 </select>
               </label>
@@ -107,7 +108,12 @@
                 <label class="row"><span>实例 ID</span><input v-model.trim="captchaForm.captcha_id" placeholder="click-default-ch" /></label>
                 <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:9700" /></label>
               </template>
-              <template v-else>
+              <template v-else-if="captchaForm.captcha_provider === 'tianai'">
+                <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://tianai-captcha.xiaoziyi.com" /></label>
+                <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:21001" /></label>
+                <p class="hint">前端取题与后端二次验证（/check2）都用服务地址；SDK 静态资源已随站点发布在 /tac/ 下，无需额外配置。</p>
+              </template>
+              <template v-else-if="captchaForm.captcha_provider === 'recaptcha'">
                 <label class="row"><span>Site Key</span><input v-model.trim="captchaForm.recaptcha_site_key" placeholder="6Le…" /></label>
                 <label class="row">
                   <span>Secret Key</span>
@@ -552,7 +558,7 @@ async function bootstrap() {
   ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
   if (data.settings.web_origin) callbackBase.value = data.settings.web_origin;
   Object.assign(captchaForm, {
-    captcha_provider: data.settings.captcha_provider === 'recaptcha' ? 'recaptcha' : 'gocaptcha',
+    captcha_provider: data.settings.captcha_provider === 'recaptcha' ? 'recaptcha' : data.settings.captcha_provider === 'tianai' ? 'tianai' : 'gocaptcha',
     captcha_api: data.settings.captcha_api ?? '',
     captcha_verify_api: data.settings.captcha_verify_api ?? '',
     captcha_id: data.settings.captcha_id ?? 'click-default-ch',

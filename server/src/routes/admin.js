@@ -225,10 +225,10 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
         body[key] = u;
       }
     }
-    // 验证服务类型：gocaptcha（点选）/ recaptcha（v2 勾选框）
+    // 验证服务类型：gocaptcha（点选）/ tianai（天爱滑块）/ recaptcha（v2 勾选框）
     if (body.captcha_provider !== undefined) {
       const p = String(body.captcha_provider ?? '').trim();
-      if (!['gocaptcha', 'recaptcha'].includes(p)) return res.status(400).json({ error: '验证码类型仅支持 gocaptcha 或 recaptcha' });
+      if (!['gocaptcha', 'tianai', 'recaptcha'].includes(p)) return res.status(400).json({ error: '验证码类型仅支持 gocaptcha、tianai 或 recaptcha' });
       body.captcha_provider = p;
     }
     if (body.recaptcha_site_key !== undefined) {

@@ -119,11 +119,14 @@ export async function captchaApi() {
   return (await getSetting('captcha_api')) || '';
 }
 
+/** 验证码 provider：tianai（天爱滑块）| recaptcha（Google 勾选）| gocaptcha（点选），未知值回退 gocaptcha */
 function captchaProviderOf(all) {
-  return all.captcha_provider === 'recaptcha' ? 'recaptcha' : 'gocaptcha';
+  if (all.captcha_provider === 'recaptcha') return 'recaptcha';
+  if (all.captcha_provider === 'tianai') return 'tianai';
+  return 'gocaptcha';
 }
 
-/** 验证码是否生效：开关打开 + 当前 provider 所需配置齐全 */
+/** 验证码是否生效：开关打开 + 当前 provider 所需配置齐全（tianai/gocaptcha 都复用 captcha_api 作为服务基址） */
 function captchaEnabledOf(all) {
   if (all.captcha_enabled !== '1') return false;
   return captchaProviderOf(all) === 'recaptcha'

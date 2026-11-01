@@ -3,7 +3,10 @@
  * 行为验证弹窗（provider 随 site.info.captchaProvider 切换）：
  * - gocaptcha：封装 go-captcha-vue 的 Click 点选组件，弹窗内取题点选；
  * - recaptcha：Google reCAPTCHA v2 勾选框（recaptcha.net 镜像加载，大陆可达），
- *   勾选通过后自动以 token 调用 action，无需点按钮。
+ *   勾选通过后自动以 token 调用 action，无需点按钮；
+ * - tianai：自托管天爱滑块（tianai-captcha-demo），按需加载本地 /tac/ 静态 SDK（tac.min.js + tac.css），
+ *   SDK 在弹窗内滑块验证（自己向服务 /gen 取题、/check 校验轨迹），通过后拿到 captcha id，
+ *   直接以 id 调用 action（后端再向服务 /check2 二次验证）。
  * 用法：
  *   <CaptchaDialog v-model:open="open" :action="doSave" />
  *   open.value = true 打开弹窗；验证完成后调用 action({key, value})，
@@ -33,6 +36,109 @@ const emit = defineEmits<{ (e: 'update:open', v: boolean): void }>();
 const site = useSiteStore();
 
 const isRecaptcha = computed(() => site.info.captchaProvider === 'recaptcha');
+const isTianai = computed(() => site.info.captchaProvider === 'tianai');
+
+/* ---------- tianai（自托管天爱滑块，本地 /tac/ 静态 SDK 按需加载） ---------- */
+const TAC_BOX_ID = 'tac-captcha-box';
+let tacPromise: Promise<any> | null = null;
+function loadTac(): Promise<any> {
+  if (tacPromise) return tacPromise;
+  tacPromise = new Promise((resolve, reject) => {
+    const w = window as any;
+    if (w.TAC) return resolve(w.TAC);
+    if (!document.querySelector('link[data-tac]')) {
+      const l = document.createElement('link');
+      l.rel = 'stylesheet';
+      l.href = '/tac/css/tac.css';
+      l.setAttribute('data-tac', '');
+      document.head.appendChild(l);
+    }
+    (w as any)._tacOnload = () => resolve(w.TAC);
+    const s = document.createElement('script');
+    s.src = '/tac/js/tac.min.js';
+    s.async = true;
+    s.onload = () => resolve(w.TAC);
+    s.onerror = () => {
+      tacPromise = null;
+      reject(new Error('script load failed'));
+    };
+    document.head.appendChild(s);
+  });
+  return tacPromise;
+}
+
+const tacEl = ref<HTMLDivElement | null>(null);
+let tacInstance: any = null;
+
+async function renderTianai() {
+  loadError.value = '';
+  if (!site.info.captchaApi) {
+    loadError.value = '验证码服务未配置';
+    return;
+  }
+  loading.value = true;
+  try {
+    const TAC = await loadTac();
+    await nextTick(); // loadError 分支切换回组件分支后再挂载
+    if (!tacEl.value) return;
+    destroyTianai();
+    const base = site.info.captchaApi.replace(/\/+$/, '');
+    tacInstance = new TAC(
+      {
+        requestCaptchaDataUrl: `${base}/gen?type=SLIDER`,
+        validCaptchaUrl: `${base}/check`,
+        bindEl: `#${TAC_BOX_ID}`,
+        validSuccess: (_res: any, _c: any, tac: any) => {
+          tac.destroyWindow();
+          void onTianaiSuccess(_res);
+        },
+        validFail: () => {
+          error.value = '验证未通过，请重新滑动';
+        },
+        btnCloseFun: (_el: any, tac: any) => {
+          tac.destroyWindow();
+          close();
+        },
+      },
+      {}
+    ).init();
+  } catch {
+    loadError.value = '验证码脚本加载失败，请检查网络或稍后再试';
+  } finally {
+    loading.value = false;
+  }
+}
+
+/** 滑块轨迹校验通过 → 拿 captcha id 调 action（后端二次验证 /check2） */
+async function onTianaiSuccess(res: any) {
+  if (busy.value) return;
+  busy.value = true;
+  try {
+    await props.action({ key: String(res?.data?.id ?? res?.data ?? ''), value: '' });
+    close();
+  } catch (e: any) {
+    if (isCaptchaFailure(e)) {
+      // 验证未通过/失效/服务不可用：重建滑块让用户重新滑动，再显示原因
+      await renderTianai();
+      error.value = errMsg(e);
+    } else {
+      // 业务错误（如密码错误）：关闭弹窗，由表单层展示
+      close();
+    }
+  } finally {
+    busy.value = false;
+  }
+}
+
+function destroyTianai() {
+  try {
+    tacInstance?.destroyWindow?.();
+  } catch {
+    /* 实例未初始化时忽略 */
+  }
+  tacInstance = null;
+  if (tacEl.value) tacEl.value.innerHTML = '';
+}
 
 /* ---------- reCAPTCHA v2 勾选框（recaptcha.net 镜像，大陆可达） ---------- */
 let grecaptchaPromise: Promise<any> | null = null;
@@ -145,7 +251,7 @@ async function load() {
   error.value = '';
   loadError.value = '';
   dots.value = [];
-  if (isRecaptcha.value) return;
+  if (isRecaptcha.value || isTianai.value) return;
   if (!site.info.captchaApi) {
     loadError.value = '验证码服务未配置';
     return;
@@ -194,6 +300,7 @@ watch(
         lockScroll();
       }
       if (isRecaptcha.value) renderRecaptcha();
+      else if (isTianai.value) renderTianai();
       else load();
     } else {
       const d = dlgEl.value;
@@ -207,6 +314,7 @@ function onDialogClose() {
   window.removeEventListener('keydown', onEscKey, true);
   restoreScroll();
   resetRecaptcha();
+  destroyTianai();
   emit('update:open', false);
 }
 
@@ -276,6 +384,15 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
 
     <div v-if="isRecaptcha" class="captcha-body">
       <div ref="rcEl" class="recaptcha-box"></div>
+      <p v-if="error" class="captcha-result">{{ error }}</p>
+      <p v-if="busy" class="captcha-busy">正在验证…</p>
+    </div>
+    <div v-else-if="isTianai" class="captcha-body">
+      <template v-if="loadError">
+        <span class="captcha-error">{{ loadError }}</span>
+        <button class="captcha-retry" type="button" @click="renderTianai()">重试</button>
+      </template>
+      <div v-else :id="TAC_BOX_ID" ref="tacEl" class="tac-box"></div>
       <p v-if="error" class="captcha-result">{{ error }}</p>
       <p v-if="busy" class="captcha-busy">正在验证…</p>
     </div>
@@ -402,6 +519,13 @@ dialog.captcha-modal--inline .captcha-panel {
   display: flex;
   justify-content: center;
   min-height: 78px;
+}
+
+/* tianai 滑块容器：SDK init() 会把验证窗 DOM 注入进来，预留高度避免弹窗跳动 */
+.tac-box {
+  display: flex;
+  justify-content: center;
+  min-height: 300px;
 }
 
 .captcha-error {

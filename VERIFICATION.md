@@ -656,3 +656,20 @@
   - `web/src/views/AuthCallbackView.vue` 处理 `?bind=ok|fail&reason=`：ok → `fetchMe()` 刷新用户后回个人中心；fail → 展示原因后回个人中心；token 回调优先级不变。
 - **测试**：smoke-auth +13（401/501/400 入口、改密全路径、首设免验、新密码登录、解绑保护与成功、非法 provider）→ **47/0**；smoke-admin 76/0、captcha 39/0、articles 24/0 未受影响；`npm run build` 通过。
 - **本地排障**：smoke 全 404「接口不存在」→ 根因 3010 被旧 node 进程（10/30 23:11 启动）占用，误杀了非监听进程；用 `Get-NetTCPConnection -LocalPort 3010` 找到真实 owner 后重启，47/0。
+
+## 64. 接入 tianai-captcha 滑块验证码（自建服务，第三引擎）
+- **服务端部署**（服务器 192，非本仓库内容，记录备查）：
+  - tianai-captcha-demo（Spring Boot 2.6.1 / Java 8 目标，starter 1.5.6）剥 data-redis 依赖后 Maven 构建（服务器 openjdk-17 + maven，`/tmp/tianai-build.sh`），产物 jar 28M。
+  - 部署 `/opt/tianai-captcha/tianai-captcha.jar` + 外置 `application.yaml`（`server.port=21001`；`captcha.expire.default=120000`；**`captcha.secondary.enabled=true`** / `expire=120000` / `key-prefix="tianai:captcha:secondary"`；`init-default-resource=true` 内置模板图；日志 `/opt/tianai-captcha/logs/tianai.log`）。
+  - systemd unit `tianai-captcha.service`（Restart=on-failure/3s）已 enable --now；宝塔 nginx vhost `node_tianai-captcha.conf`（listen 81 → proxy_pass 127.0.0.1:21001，域名 `tianai-captcha.xiaoziyi.com`）。DNS A 记录已存在；RainYun NAT 网关 Host 白名单待用户在控制台添加后外网才通（本机 `curl -H "Host: tianai-captcha.xiaoziyi.com" http://127.0.0.1:81/gen?type=SLIDER` 已 200）。
+- **后端**（`server/src/`）：
+  - `services/settings.js`：`captchaProviderOf()` 三态 `tianai|recaptcha|gocaptcha`（未知回退 gocaptcha）；tianai 复用 `captcha_api`（服务基址）+ `captcha_verify_api`（可选二次验证地址，默认回退服务基址）。
+  - `services/captcha.js`：新增 `verifyTianai(payload, cfg)`——`payload.key`（= 前端二次验证 id）必填否则 `CAPTCHA_REQUIRED`；GET `{verify_api‖api}/check2?id=`（AbortSignal.timeout 5s）严格判定响应体 `true`；通过后进程内 consumed Set 防重放；`verifyCaptcha()` 三分流流。
+  - `routes/admin.js`：`captcha_provider` 白名单 `['gocaptcha','tianai','recaptcha']`。
+- **前端**（`web/src/`）：
+  - tac-web SDK（1.5.6）静态资源随站点发布：`web/public/tac/{js/tac.min.js, css/tac.css, images/dun.jpeg}`。
+  - `stores/site.ts`：`captchaProvider` 类型 +`'tianai'`。
+  - `components/CaptchaDialog.vue`：tianai 分支按需加载 `/tac/css/tac.css` + `/tac/js/tac.min.js`（window.TAC），`new TAC({requestCaptchaDataUrl: '{api}/gen?type=SLIDER', validCaptchaUrl: '{api}/check', bindEl})` 渲染滑块；`validSuccess` 里 `tac.destroyWindow()` 后拿 `res.data.id` 作为 key 提交业务请求；`isCaptchaFailure` → 重建滑块（一次一用）；关闭/业务成功销毁实例。SDK 加载失败显示错误 + 重试按钮。
+  - `views/AdminView.vue`：「行为验证码」页三选一（gocaptcha 点选 / **tianai 天爱滑块（自建 tianai-captcha）** / recaptcha）；tianai 分支只需填服务地址（placeholder `https://tianai-captcha.xiaoziyi.com`）+ 可选内部校验地址（同机 `http://127.0.0.1:21001`）。
+- **测试**：smoke-captcha +9 → **48/0**（tianai 段：provider 切换与 /site 下发、send-code 带 key 通过二次验证、缺 key 400、check2 未通过 400、通过后到密码校验 401、同 id 重放 400、服务不可用 502、还原配置）；`npm run build`（vue-tsc）通过。
+- **回归环境**：本机 Windows 第二 mysqld 实例（`%LOCALAPPDATA%\MySQLSmoke`，端口 3307，`--initialize-insecure`，建 `shimmerblog` 库 + `smoke`@`%` 用户）+ `tmp/run-smoke.ps1`（node.exe 起 server + 跑 smoke，环境变量注入 DB）。

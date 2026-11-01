@@ -5,6 +5,10 @@ import { getSetting } from './settings.js';
  * - gocaptcha（GoCaptcha 点选）：前端向 captcha_api 发 GET /api/v1/public/get-data?id=<captcha_id> 取题，
  *   前端随业务请求带上 captcha = { key, value }（value 为点选坐标串 "x1,y1,x2,y2,..."），
  *   后端向 verify 接口 POST /api/v1/public/check-data { id, captchaKey, value } 二次校验；
+ * - tianai（天爱滑块，自托管 tianai-captcha-demo 服务）：前端 tac SDK 弹滑块，
+ *   SDK 自己向服务发 GET /gen 取题、POST /check 校验滑动轨迹，通过后拿到 captcha id，
+ *   业务请求带上 captcha = { key: <id> }，后端向服务发 GET /check2?id= 二次验证
+ *   （服务端需 captcha.secondary.enabled=true，check2 一次一用，验证通过后 id 有效期 2 分钟）；
  * - recaptcha（Google reCAPTCHA v2 勾选框）：前端用 recaptcha.net 镜像加载官方组件（大陆可达），
  *   勾选后拿到 token 随业务请求带上 captcha = { value: <g-recaptcha-response> }，
  *   后端向 siteverify 接口（默认 https://recaptcha.net/recaptcha/api/siteverify）POST
@@ -19,7 +23,12 @@ const RECAPTCHA_VERIFY_DEFAULT = 'https://recaptcha.net/recaptcha/api/siteverify
 /** 生效配置：enabled 需开关打开且当前 provider 所需配置齐全 */
 export async function captchaConfig() {
   const enabled = (await getSetting('captcha_enabled')) === '1';
-  const provider = (await getSetting('captcha_provider')) === 'recaptcha' ? 'recaptcha' : 'gocaptcha';
+  const provider =
+    (await getSetting('captcha_provider')) === 'recaptcha'
+      ? 'recaptcha'
+      : (await getSetting('captcha_provider')) === 'tianai'
+        ? 'tianai'
+        : 'gocaptcha';
   const api = (await getSetting('captcha_api')) || '';
   const id = (await getSetting('captcha_id')) || CAPTCHA_ID_DEFAULT;
   const recaptchaSiteKey = (await getSetting('recaptcha_site_key')) || '';
@@ -27,6 +36,7 @@ export async function captchaConfig() {
   const recaptchaVerifyBase =
     (await getSetting('recaptcha_verify_api')) || RECAPTCHA_VERIFY_DEFAULT;
   const ok = provider === 'recaptcha' ? !!(recaptchaSiteKey && recaptchaSecret) : !!api;
+  // tianai 与 gocaptcha 都复用 captcha_api 作为服务基址（前端取题/后端校验同源）
   return {
     enabled: enabled && ok,
     provider,
@@ -102,6 +112,33 @@ async function verifyRecaptcha(payload, cfg) {
 }
 
 /**
+ * tianai（天爱滑块）二次验证：业务请求只带 key = captcha id，
+ * 后端向服务 GET /check2?id= 确认「已通过轨迹校验且未被消费」，check2 命中即消费（一次一用）。
+ * 服务端返回纯文本 true/false（Spring @ResponseBody boolean）。
+ */
+async function verifyTianai(payload, cfg) {
+  const key = String(payload?.key ?? '');
+  if (!key) return { ok: false, status: 400, error: '请完成行为验证', code: 'CAPTCHA_REQUIRED' };
+  if (consumed.has(key)) return { ok: false, status: 400, error: '验证已失效，请重新验证', code: 'CAPTCHA_FAILED' };
+
+  const base = (await getSetting('captcha_verify_api')) || cfg.api;
+  try {
+    const r = await fetch(`${base.replace(/\/+$/, '')}/check2?id=${encodeURIComponent(key)}`, {
+      signal: AbortSignal.timeout(5000),
+    });
+    const txt = await r.text();
+    if (r.ok && /"?true"?/i.test(txt.trim())) {
+      consumeSweep();
+      consumed.set(key, Date.now());
+      return { ok: true };
+    }
+    return { ok: false, status: 400, error: '验证未通过，请重新验证', code: 'CAPTCHA_FAILED' };
+  } catch {
+    return { ok: false, status: 502, error: '验证码服务暂不可用，请稍后再试', code: 'CAPTCHA_UNAVAILABLE' };
+  }
+}
+
+/**
  * 校验验证码。返回 { ok: true } 或 { ok: false, status, error }。
  * - 未启用 → 直接放行（skipped: true）
  * - 服务不可达 → 502（fail-closed：启用状态下必须验证通过才放行）
@@ -119,7 +156,9 @@ export async function verifyCaptcha(payload) {
     }
   }
 
-  return cfg.provider === 'recaptcha' ? verifyRecaptcha(payload, cfg) : verifyGocaptcha(payload, cfg);
+  if (cfg.provider === 'recaptcha') return verifyRecaptcha(payload, cfg);
+  if (cfg.provider === 'tianai') return verifyTianai(payload, cfg);
+  return verifyGocaptcha(payload, cfg);
 }
 
 /** Express 中间件：校验 req.body.captcha，失败直接 4xx/5xx */

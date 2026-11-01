@@ -10,7 +10,7 @@ export interface SiteInfo {
   githubEnabled: boolean;
   googleEnabled: boolean;
   captchaEnabled: boolean;
-  captchaProvider: 'gocaptcha' | 'recaptcha';
+  captchaProvider: 'gocaptcha' | 'recaptcha' | 'tianai';
   captchaApi: string;
   captchaId: string;
   recaptchaSiteKey: string;

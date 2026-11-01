@@ -48,6 +48,17 @@ const mock = http.createServer((req, res) => {
     });
     return;
   }
+  if (req.method === 'GET' && req.url?.startsWith('/check2')) {
+    // 天爱滑块二次验证：返回纯文本 true/false
+    if (mode === 'down') {
+      req.destroy();
+      return;
+    }
+    const id = new URL(req.url, 'http://mock').searchParams.get('id') || '';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(mode === 'ok' && !!id ? 'true' : 'false');
+    return;
+  }
   res.writeHead(404, { 'Content-Type': 'application/json' });
   res.end(JSON.stringify({ code: 404, message: 'not found' }));
 });
@@ -278,6 +289,48 @@ ok('recaptcha 同 token 重放 400', r.status === 400 && /已失效/.test(r.data
 mode = 'down';
 r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass123456', captcha: { value: `tok-down-${Date.now()}` } } });
 ok('recaptcha 服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
+mode = 'ok';
+
+/* ---------- 天爱滑块 tianai（provider 切换 + /check2 二次验证 mock） ---------- */
+r = await req('PUT', '/admin/settings', {
+  token: adminToken,
+  body: { captcha_provider: 'tianai', captcha_api: `http://127.0.0.1:${MOCK_PORT}` },
+});
+ok('切到 tianai 200 且生效', r.status === 200 && r.data.captchaEnabled === true, JSON.stringify(r.data));
+r = await req('GET', '/site');
+ok('/site 暴露 captchaProvider=tianai + captchaApi', r.data.captchaEnabled === true && r.data.captchaProvider === 'tianai' && r.data.captchaApi === `http://127.0.0.1:${MOCK_PORT}`, JSON.stringify(r.data));
+
+// 换新账号分桶：loginLimiter 15min/10 次按 ip:email 计数（MAIL2 桶在 recaptcha 段已用多次）
+const MAILT = `cap3-${Date.now()}@shimmer.dev`;
+r = await req('POST', '/auth/send-code', { body: { email: MAILT, purpose: 'register', captcha: good() } });
+ok('tianai 段 send-code 200（key 二次验证通过）', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
+r = await req('POST', '/auth/register', { body: { email: MAILT, password: 'pass123456', name: 'x', code: r.data.devCode || (await latestCode(MAILT, 'register')) } });
+ok('tianai 段测试账号就绪 201', r.status === 201, JSON.stringify(r.data));
+
+mode = 'ok';
+// 未携带 key → 400 CAPTCHA_REQUIRED
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456' } });
+ok('tianai 缺 key 400', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
+
+// /check2 未通过 → 400 CAPTCHA_FAILED（mode=failure → mock 返回 false）
+mode = 'failure';
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: `ta-fail-${Date.now()}` } } });
+ok('tianai check2 未通过 400', r.status === 400 && r.data.code === 'CAPTCHA_FAILED', JSON.stringify(r.data));
+
+// 通过 → 穿过验证码层（错误密码 401）
+mode = 'ok';
+const taId = `ta-${Date.now()}`;
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'wrong-pass', captcha: { key: taId } } });
+ok('tianai 通过后到密码校验 401', r.status === 401, JSON.stringify(r.data));
+
+// id 一次一用（防重放：服务端已消费）
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: taId } } });
+ok('tianai 同 id 重放 400', r.status === 400 && /已失效/.test(r.data.error || ''), JSON.stringify(r.data));
+
+// 服务不可用 → 502 fail-closed
+mode = 'down';
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: `ta-down-${Date.now()}` } } });
+ok('tianai 服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
 
 /* ---------- 还原 ---------- */
