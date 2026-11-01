@@ -14,149 +14,153 @@
     </nav>
 
     <!-- ================= 我的文章 ================= -->
-    <section v-if="tab === 'articles'">
-      <ArticleEditor
-        v-if="editing !== null"
-        :key="editing"
-        :article-id="editing > 0 ? editing : undefined"
-        @saved="onSaved"
-        @cancel="editing = null"
-      />
-
-      <template v-else>
-        <div class="toolbar">
-          <span class="muted">共 {{ mine.length }} 篇</span>
-          <button class="btn" @click="startNew">＋ 新建文章</button>
-        </div>
-
-        <p v-if="loadingMine" class="muted">加载中…</p>
-        <p v-else-if="!mine.length" class="muted empty">还没有文章，点右上角新建第一篇吧。</p>
-
-        <ul v-else class="rows glass">
-          <li v-for="a in mine" :key="a.id" class="row">
-            <div class="row-main">
-              <div class="row-title">
-                <span class="dot" :class="a.status" />
-                <router-link :to="`/article/${a.id}`">{{ a.title }}</router-link>
-                <span v-if="a.status === 'draft'" class="chip draft">草稿</span>
-                <span v-if="a.pinned" class="chip pin">置顶</span>
-              </div>
-              <div class="row-meta">
-                <span>{{ formatDateTime(a.published_at || a.created_at) }}</span>
-                <span v-if="a.summary">· {{ a.summary.slice(0, 60) }}</span>
-              </div>
-            </div>
-            <div class="row-actions">
-              <button class="link-btn" @click="startEdit(a.id)">编辑</button>
-              <button class="link-btn danger" @click="remove(a)">删除</button>
-            </div>
-          </li>
-        </ul>
-      </template>
-    </section>
-
-    <!-- ================= 个人资料 ================= -->
-    <section v-else class="stack">
-      <form class="glass form-card" @submit.prevent="saveProfile">
-        <h2>个人资料</h2>
-        <div class="profile-row">
-          <img class="avatar big" :src="auth.user?.avatar_url || defaultAvatar" :alt="auth.user?.name" />
-          <label class="upload-chip">
-            <input type="file" accept="image/*" hidden @change="uploadAvatar" />
-            {{ uploadingAvatar ? '上传中…' : '更换头像' }}
-          </label>
-          <button
-            v-for="p in oauthAvatarSources"
-            :key="p"
-            class="upload-chip"
-            type="button"
-            :disabled="refreshingAvatar"
-            @click="refreshOAuthAvatar(p)"
-          >
-            {{ oauthAvatarLabel(p) }}
-          </button>
-          <router-link class="space-link" :to="`/space/${auth.user?.id}`">我的空间 →</router-link>
-        </div>
-        <div class="field">
-          <label>昵称</label>
-          <input v-model.trim="profileName" maxlength="50" />
-        </div>
-        <div class="field">
-          <label>简介（展示在个人空间）</label>
-          <textarea v-model="profileBio" rows="3" maxlength="500" placeholder="介绍一下自己（最多 500 字）" />
-        </div>
-        <div class="field">
-          <label>邮箱</label>
-          <input :value="auth.user?.email || '（未绑定）'" disabled />
-        </div>
-        <p v-if="profileError" class="error-tip">{{ profileError }}</p>
-        <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
-        <div class="form-actions">
-          <button class="btn-ghost logout" type="button" @click="doLogout">退出登录</button>
-          <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
-        </div>
-      </form>
-      <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
-      <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
-
-      <!-- ======== 账号安全：修改/设置密码 ======== -->
-      <form class="glass form-card" @submit.prevent="savePassword">
-        <h2>账号安全</h2>
-        <div class="field">
-          <label>当前密码</label>
-          <input
-            v-if="auth.user?.has_password"
-            v-model="pwCurrent"
-            type="password"
-            autocomplete="current-password"
-            placeholder="输入当前密码"
+    <div ref="swapHost" class="swap-host">
+      <Transition name="swap" mode="out-in" v-on="swapHandlers">
+        <section v-if="tab === 'articles'">
+          <ArticleEditor
+            v-if="editing !== null"
+            :key="editing"
+            :article-id="editing > 0 ? editing : undefined"
+            @saved="onSaved"
+            @cancel="editing = null"
           />
-          <p v-else class="field-hint">当前账号未设置密码（第三方登录注册）。设置后可使用「邮箱 + 密码」登录。</p>
-        </div>
-        <div class="field">
-          <label>新密码</label>
-          <input v-model="pwNew" type="password" autocomplete="new-password" placeholder="至少 6 位" />
-        </div>
-        <div class="field">
-          <label>确认新密码</label>
-          <input v-model="pwConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码" />
-        </div>
-        <p v-if="pwError" class="error-tip">{{ pwError }}</p>
-        <p v-if="pwNotice" class="notice">{{ pwNotice }}</p>
-        <div class="form-actions">
-          <button class="btn" type="submit" :disabled="savingPw">
-            {{ savingPw ? '保存中…' : auth.user?.has_password ? '修改密码' : '设置密码' }}
-          </button>
-        </div>
-      </form>
 
-      <!-- ======== 第三方账号绑定 ======== -->
-      <div class="glass form-card">
-        <h2>第三方账号绑定</h2>
-        <div v-for="p in bindProviders" :key="p" class="bind-row">
-          <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
-          <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
-          <button
-            v-if="bound(p)"
-            class="btn-ghost danger"
-            type="button"
-            :disabled="!!binding"
-            @click="unbind(p)"
-          >
-            {{ binding === p ? '解绑中…' : '解除绑定' }}
-          </button>
-          <a
-            v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
-            class="btn-ghost bind-link"
-            :href="`/api/auth/bind/${p}`"
-          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
-          <span v-else class="bind-na">站点未启用</span>
-        </div>
-        <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
-        <p v-if="bindError" class="error-tip">{{ bindError }}</p>
-        <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
-      </div>
-    </section>
+          <template v-else>
+            <div class="toolbar">
+              <span class="muted">共 {{ mine.length }} 篇</span>
+              <button class="btn" @click="startNew">＋ 新建文章</button>
+            </div>
+
+            <p v-if="loadingMine" class="muted">加载中…</p>
+            <p v-else-if="!mine.length" class="muted empty">还没有文章，点右上角新建第一篇吧。</p>
+
+            <ul v-else class="rows glass">
+              <li v-for="a in mine" :key="a.id" class="row">
+                <div class="row-main">
+                  <div class="row-title">
+                    <span class="dot" :class="a.status" />
+                    <router-link :to="`/article/${a.id}`">{{ a.title }}</router-link>
+                    <span v-if="a.status === 'draft'" class="chip draft">草稿</span>
+                    <span v-if="a.pinned" class="chip pin">置顶</span>
+                  </div>
+                  <div class="row-meta">
+                    <span>{{ formatDateTime(a.published_at || a.created_at) }}</span>
+                    <span v-if="a.summary">· {{ a.summary.slice(0, 60) }}</span>
+                  </div>
+                </div>
+                <div class="row-actions">
+                  <button class="link-btn" @click="startEdit(a.id)">编辑</button>
+                  <button class="link-btn danger" @click="remove(a)">删除</button>
+                </div>
+              </li>
+            </ul>
+          </template>
+        </section>
+
+        <!-- ================= 个人资料 ================= -->
+        <section v-else class="stack">
+          <form class="glass form-card" @submit.prevent="saveProfile">
+            <h2>个人资料</h2>
+            <div class="profile-row">
+              <img class="avatar big" :src="auth.user?.avatar_url || defaultAvatar" :alt="auth.user?.name" />
+              <label class="upload-chip">
+                <input type="file" accept="image/*" hidden @change="uploadAvatar" />
+                {{ uploadingAvatar ? '上传中…' : '更换头像' }}
+              </label>
+              <button
+                v-for="p in oauthAvatarSources"
+                :key="p"
+                class="upload-chip"
+                type="button"
+                :disabled="refreshingAvatar"
+                @click="refreshOAuthAvatar(p)"
+              >
+                {{ oauthAvatarLabel(p) }}
+              </button>
+              <router-link class="space-link" :to="`/space/${auth.user?.id}`">我的空间 →</router-link>
+            </div>
+            <div class="field">
+              <label>昵称</label>
+              <input v-model.trim="profileName" maxlength="50" />
+            </div>
+            <div class="field">
+              <label>简介（展示在个人空间）</label>
+              <textarea v-model="profileBio" rows="3" maxlength="500" placeholder="介绍一下自己（最多 500 字）" />
+            </div>
+            <div class="field">
+              <label>邮箱</label>
+              <input :value="auth.user?.email || '（未绑定）'" disabled />
+            </div>
+            <p v-if="profileError" class="error-tip">{{ profileError }}</p>
+            <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
+            <div class="form-actions">
+              <button class="btn-ghost logout" type="button" @click="doLogout">退出登录</button>
+              <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
+            </div>
+          </form>
+          <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
+          <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
+
+          <!-- ======== 账号安全：修改/设置密码 ======== -->
+          <form class="glass form-card" @submit.prevent="savePassword">
+            <h2>账号安全</h2>
+            <div class="field">
+              <label>当前密码</label>
+              <input
+                v-if="auth.user?.has_password"
+                v-model="pwCurrent"
+                type="password"
+                autocomplete="current-password"
+                placeholder="输入当前密码"
+              />
+              <p v-else class="field-hint">当前账号未设置密码（第三方登录注册）。设置后可使用「邮箱 + 密码」登录。</p>
+            </div>
+            <div class="field">
+              <label>新密码</label>
+              <input v-model="pwNew" type="password" autocomplete="new-password" placeholder="至少 6 位" />
+            </div>
+            <div class="field">
+              <label>确认新密码</label>
+              <input v-model="pwConfirm" type="password" autocomplete="new-password" placeholder="再次输入新密码" />
+            </div>
+            <p v-if="pwError" class="error-tip">{{ pwError }}</p>
+            <p v-if="pwNotice" class="notice">{{ pwNotice }}</p>
+            <div class="form-actions">
+              <button class="btn" type="submit" :disabled="savingPw">
+                {{ savingPw ? '保存中…' : auth.user?.has_password ? '修改密码' : '设置密码' }}
+              </button>
+            </div>
+          </form>
+
+          <!-- ======== 第三方账号绑定 ======== -->
+          <div class="glass form-card">
+            <h2>第三方账号绑定</h2>
+            <div v-for="p in bindProviders" :key="p" class="bind-row">
+              <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
+              <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
+              <button
+                v-if="bound(p)"
+                class="btn-ghost danger"
+                type="button"
+                :disabled="!!binding"
+                @click="unbind(p)"
+              >
+                {{ binding === p ? '解绑中…' : '解除绑定' }}
+              </button>
+              <a
+                v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
+                class="btn-ghost bind-link"
+                :href="`/api/auth/bind/${p}`"
+              >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
+              <span v-else class="bind-na">站点未启用</span>
+            </div>
+            <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
+            <p v-if="bindError" class="error-tip">{{ bindError }}</p>
+            <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
+          </div>
+        </section>
+      </Transition>
+    </div>
   </main>
 </template>
 
@@ -168,6 +172,7 @@ import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import { formatDateTime } from '../utils/format';
+import { usePaneSwap } from '../utils/usePaneSwap';
 import type { ArticleBrief } from '../types';
 import bundledAvatar from '../assets/default-avatar.svg';
 import ArticleEditor from '../components/ArticleEditor.vue';
@@ -181,6 +186,8 @@ const tabs = [
   { key: 'profile', label: '个人资料' },
 ] as const;
 const tab = ref<'articles' | 'profile'>('articles');
+// 页内页签切换：淡入 + 微位移（旧内容 140ms 淡出位移，新内容 220ms 淡入上移）
+const { swapHost, swapHandlers } = usePaneSwap();
 
 const auth = useAuthStore();
 const route = useRoute();

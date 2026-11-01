@@ -1,6 +1,7 @@
 import { createRouter, createWebHistory } from 'vue-router';
 import { useAuthStore } from '../stores/auth';
 import { setArticleTitle } from '../utils/title';
+import { scrollGate } from '../utils/scrollGate';
 
 const router = createRouter({
   history: createWebHistory(),
@@ -21,8 +22,17 @@ const router = createRouter({
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue') },
   ],
   scrollBehavior(to, from, saved) {
+    // 星光过渡：滚动复位必须等旧页解散完 —— 否则视口在离场一开始就弹回顶部，
+    // 按旧滚动位置规划的消散小窗全部落在画面外（整屏瞬黑）。
+    // 此处只挂起目标位置，App.vue 在 onEnter 里应用。
+    if (scrollGate.active) {
+      scrollGate.set(saved ?? { top: 0, left: 0 });
+      return false;
+    }
     if (saved) return saved;
-    return { top: 0 };
+    // behavior: 'instant' 绕过 html { scroll-behavior: smooth }，
+    // 避免切页时平滑滚动进行中导致星光过渡采样到漂移中的坐标
+    return { top: 0, behavior: 'instant' as ScrollBehavior };
   },
 });
 
