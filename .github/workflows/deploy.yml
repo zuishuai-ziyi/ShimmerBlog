@@ -1,9 +1,11 @@
 name: Deploy
 
-# 推送到 main 自动部署，也可在 Actions 页面手动触发
+# 仅在发版（推送 v* tag）时部署；普通 push 到 main 不再触发。
+# workflow_dispatch 作为手动兜底（此时不会创建 Release）。
 on:
   push:
-    branches: [main]
+    tags:
+      - 'v*'
   workflow_dispatch:
 
 concurrency:
@@ -137,3 +139,27 @@ jobs:
           tail -n 40 "/www/wwwlogs/nodejs/${{ env.NODE_PROJECT }}.log" 2>/dev/null || true
           exit 1
           REMOTE
+
+  # 部署成功后自动创建 GitHub Release（仅 tag 触发时；workflow_dispatch 手动触发跳过）
+  release:
+    name: Create GitHub Release
+    needs: deploy
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: 创建 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "$GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag
