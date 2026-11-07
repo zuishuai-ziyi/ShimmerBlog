@@ -654,8 +654,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, reactive, ref, watch } from 'vue';
-import adminHttp, { errMsg } from '../api/adminHttp';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import adminHttp, { ADMIN_UNAUTHORIZED_EVENT, errMsg } from '../api/adminHttp';
 import { isCaptchaFailure } from '../api/http';
 import { useAdminStore } from '../stores/admin';
 import { useSiteStore } from '../stores/site';
@@ -693,6 +693,8 @@ async function doLogin() {
   try {
     await admin.login(password.value, gateCaptchaArg.value);
     password.value = '';
+    // 登录成功：清掉「登录状态已过期」等登录门提示
+    gateError.value = '';
     await bootstrap();
     await Promise.all([loadUsers(), loadArticles()]);
   } catch (e) {
@@ -716,6 +718,22 @@ async function doLoginWithCaptcha(c: { key: string; value: string }) {
 
 function logout() {
   admin.logout();
+}
+
+/* ---- 会话过期提示 ---- */
+/**
+ * 会话过期（401）时在登录门给出可见提示，避免用户被静默退回登录门却不知原因。
+ *
+ * api/adminHttp.ts 的响应拦截器会广播 ADMIN_UNAUTHORIZED_EVENT：
+ * - detail.hadToken === true  → 原本有令牌但已失效（会话过期）→ 提示重新登录
+ * - detail.hadToken === false → 本来就没登录（登录门下的正常 401）→ 不提示
+ *
+ * 文案只写在视图层：store 只负责复位登录态，不携带 UI 文案。
+ */
+function onAdminUnauthorized(e: Event) {
+  const hadToken = (e as CustomEvent<{ hadToken?: boolean }>).detail?.hadToken === true;
+  if (!hadToken) return;
+  gateError.value = '登录状态已过期，请重新登录';
 }
 
 /* ---- 管理密码 ---- */
@@ -1868,16 +1886,47 @@ watch(tab, (t) => {
 });
 
 /* ---------------- 轮询（静默刷新，不重建表单状态） ---------------- */
-// 审核记录：5s。跳过：非审核 tab / 页面隐藏。
+/**
+ * 轮询总开关：只有「已登录且会话已校验」才允许轮询。
+ * 未登录时轮询会拿到 401，曾触发整页 reload（登录界面反复自动刷新），故未登录不创建定时器：
+ * 登录成功后才启动，登出 / 401 失效后立即停止。
+ */
+const canPoll = computed(() => admin.authed && admin.checked);
+
+// 审核记录：5s。跳过：未登录 / 非审核 tab / 页面隐藏。
 // 不重跑 loadSettings / loadReviewSettings，不会覆盖未保存的审核流程与 AI 配置输入。
-useSilentPolling(() => loadRecords(true), 5000, () => tab.value === 'review');
-// 用户：5s。跳过：非用户 tab / 搜索框有输入（避免打断筛选）/ 编辑弹窗打开中 / 页面隐藏。
-useSilentPolling(() => loadUsers(true), 5000, () => {
-  return tab.value === 'users' && !userQuery.value.trim() && !editOpen.value;
-});
-// 文章：5s。跳过：非文章 tab / 搜索框有输入 / 页面隐藏。
-useSilentPolling(() => loadArticles(true), 5000, () => {
-  return tab.value === 'articles' && !articleQuery.value.trim();
+const recordsPolling = useSilentPolling(
+  () => loadRecords(true),
+  5000,
+  () => canPoll.value && tab.value === 'review',
+  () => canPoll.value,
+);
+// 用户：5s。跳过：未登录 / 非用户 tab / 搜索框有输入（避免打断筛选）/ 编辑弹窗打开中 / 页面隐藏。
+const usersPolling = useSilentPolling(
+  () => loadUsers(true),
+  5000,
+  () => canPoll.value && tab.value === 'users' && !userQuery.value.trim() && !editOpen.value,
+  () => canPoll.value,
+);
+// 文章：5s。跳过：未登录 / 非文章 tab / 搜索框有输入 / 页面隐藏。
+const articlesPolling = useSilentPolling(
+  () => loadArticles(true),
+  5000,
+  () => canPoll.value && tab.value === 'articles' && !articleQuery.value.trim(),
+  () => canPoll.value,
+);
+
+// 登录成功 → 开轮询；登出 / 401 失效 → 立即停掉定时器（未登录时不再打接口）
+watch(canPoll, (ok) => {
+  if (ok) {
+    recordsPolling.start();
+    usersPolling.start();
+    articlesPolling.start();
+  } else {
+    recordsPolling.stop();
+    usersPolling.stop();
+    articlesPolling.stop();
+  }
 });
 
 function fmtDate(s: string): string {
@@ -1885,6 +1934,8 @@ function fmtDate(s: string): string {
 }
 
 onMounted(async () => {
+  // 会话过期提示：组件自己监听（store 已清空登录态，文案留在视图层）
+  window.addEventListener(ADMIN_UNAUTHORIZED_EVENT, onAdminUnauthorized);
   // 无论有无令牌都先校验一次会话：过期令牌不会闪现后台内容
   await admin.check();
   booting.value = false;
@@ -1892,6 +1943,11 @@ onMounted(async () => {
   await bootstrap();
   await loadUsers();
   await loadArticles();
+});
+
+onUnmounted(() => {
+  // 解绑，避免重复绑定与内存泄漏
+  window.removeEventListener(ADMIN_UNAUTHORIZED_EVENT, onAdminUnauthorized);
 });
 </script>
 

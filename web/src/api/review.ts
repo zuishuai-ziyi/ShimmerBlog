@@ -17,15 +17,33 @@ reviewHttp.interceptors.request.use((cfg) => {
 /** 401 时放行的接口：登录（密码错误）与 /me（store.check 已自行登出） */
 const UNAUTHORIZED_PASSTHROUGH = ['/review/login', '/review/me'];
 
+/**
+ * 会话失效（401）广播事件：store 收到后把审核员置为未登录，页面自然回到登录门。
+ *
+ * 这里曾无条件 `window.location.reload()`，是「审核后台登录界面自动刷新」的根因：
+ * 登录门下轮询每 5s 拿到一次 401 → 整页重载 → 表单与验证码实例被反复销毁重建，
+ * 并形成 5s 一次的刷新循环。因此 401 一律不再整页刷新。
+ */
+export const REVIEW_UNAUTHORIZED_EVENT = 'sb:reviewer-unauthorized';
+
+/** 广播 401：hadToken=true 表示「原本有令牌但已失效」，false 表示「本来就没登录」 */
+function notifyUnauthorized(hadToken: boolean): void {
+  if (typeof window === 'undefined') return;
+  window.dispatchEvent(new CustomEvent(REVIEW_UNAUTHORIZED_EVENT, { detail: { hadToken } }));
+}
+
 reviewHttp.interceptors.response.use(
   (res) => res,
   (err: unknown) => {
     if (axios.isAxiosError(err) && err.response?.status === 401) {
       const url = String(err.config?.url ?? '');
       if (!UNAUTHORIZED_PASSTHROUGH.some((p) => url.includes(p))) {
-        // 令牌失效：清除审核员令牌并刷新回登录门
+        // 先判断是否存在令牌：
+        // - 无令牌：本来就在登录门，只需清令牌 + 复位未登录态，绝不 reload
+        // - 有令牌：会话过期，同样只复位状态回到登录门，绝不 reload（否则会形成刷新循环）
+        const hadToken = !!localStorage.getItem('sb_reviewer_token');
         localStorage.removeItem('sb_reviewer_token');
-        window.location.reload();
+        notifyUnauthorized(hadToken);
       }
     }
     return Promise.reject(err);

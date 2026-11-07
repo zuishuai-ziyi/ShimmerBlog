@@ -258,7 +258,7 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, ref, watch } from 'vue';
 import { marked } from 'marked';
 import DOMPurify from 'dompurify';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
@@ -281,6 +281,7 @@ import {
   isCaptchaFailure,
   isCaptchaRequired,
   isConflict,
+  REVIEW_UNAUTHORIZED_EVENT,
   type HistoryItem,
   type QueueItem,
   type ReviewRecord,
@@ -316,6 +317,8 @@ async function submitLogin(captcha?: { key: string; value: string }) {
   try {
     await reviewer.login(username.value.trim(), password.value, captcha);
     password.value = '';
+    // 登录成功：清掉「登录状态已过期」等登录门提示
+    gateError.value = '';
     await bootstrap();
   } catch (e) {
     // 验证码未通过：抛给验证码弹窗，由弹窗内部提示并自动换题
@@ -357,6 +360,22 @@ function logout() {
   record.value = null;
   queue.value = [];
   historyItems.value = [];
+}
+
+/* ---------------- 会话过期提示 ---------------- */
+/**
+ * 会话过期（401）时给出可见提示，避免用户被静默退回登录门却不知原因。
+ *
+ * api/review.ts 的响应拦截器会广播 REVIEW_UNAUTHORIZED_EVENT：
+ * - detail.hadToken === true  → 原本有令牌但已失效（会话过期）→ 提示重新登录
+ * - detail.hadToken === false → 本来就没登录（登录门下的正常 401）→ 不提示
+ *
+ * 文案只写在视图层：store 只负责复位登录态，不携带 UI 文案。
+ */
+function onReviewUnauthorized(e: Event) {
+  const hadToken = (e as CustomEvent<{ hadToken?: boolean }>).detail?.hadToken === true;
+  if (!hadToken) return;
+  gateError.value = '登录状态已过期，请重新登录';
 }
 
 /* ---------------- 通用提示 ---------------- */
@@ -685,17 +704,44 @@ watch(tab, (t) => {
 });
 
 /* ---------------- 轮询 ---------------- */
-// 审核队列：5s 静默刷新。跳过：非队列 tab / 正在裁决 / 正在写拒绝备注 / 页面隐藏。
+/**
+ * 轮询总开关：只有「已登录且会话已校验」才允许轮询。
+ * 登录门（!reviewer.authed）下轮询每 5s 会拿到一次 401，曾触发整页 reload →
+ * 登录界面反复自动刷新（表单与验证码实例反复销毁重建）。因此未登录时根本不创建定时器：
+ * 登录成功后才启动，登出 / 401 失效后立即停止。
+ */
+const canPoll = computed(() => reviewer.authed && reviewer.checked);
+
+// 审核队列：5s 静默刷新。跳过：未登录 / 非队列 tab / 正在裁决 / 正在写拒绝备注 / 页面隐藏。
 // 不动 currentId 与 record（当前选中详情不会被清空），也不弹提示。
-useSilentPolling(() => loadQueue(true), 5000, () => {
-  return tab.value === 'queue' && !deciding.value && !rejectOpen.value;
-});
-// 我的审核记录：5s 静默刷新（同样跳过非历史 tab 与页面隐藏）。
-useSilentPolling(() => loadHistory(true), 5000, () => {
-  return tab.value === 'history' && !deciding.value;
+const queuePolling = useSilentPolling(
+  () => loadQueue(true),
+  5000,
+  () => canPoll.value && tab.value === 'queue' && !deciding.value && !rejectOpen.value,
+  () => canPoll.value,
+);
+// 我的审核记录：5s 静默刷新（同样跳过未登录 / 非历史 tab 与页面隐藏）。
+const historyPolling = useSilentPolling(
+  () => loadHistory(true),
+  5000,
+  () => canPoll.value && tab.value === 'history' && !deciding.value,
+  () => canPoll.value,
+);
+
+// 登录成功 → 开轮询；登出 / 401 失效 → 立即停掉定时器（未登录时不再打接口）
+watch(canPoll, (ok) => {
+  if (ok) {
+    queuePolling.start();
+    historyPolling.start();
+  } else {
+    queuePolling.stop();
+    historyPolling.stop();
+  }
 });
 
 onMounted(async () => {
+  // 会话过期提示：组件自己监听（store 已清空登录态，文案留在视图层）
+  window.addEventListener(REVIEW_UNAUTHORIZED_EVENT, onReviewUnauthorized);
   // 无论有无令牌都先校验一次会话：过期令牌不会闪现工作台内容
   await reviewer.check();
   booting.value = false;
@@ -703,6 +749,11 @@ onMounted(async () => {
   await bootstrap();
   // 预取通知订阅（账号设置面板用）
   loadNotifyPrefs();
+});
+
+onUnmounted(() => {
+  // 解绑，避免重复绑定与内存泄漏
+  window.removeEventListener(REVIEW_UNAUTHORIZED_EVENT, onReviewUnauthorized);
 });
 </script>
 

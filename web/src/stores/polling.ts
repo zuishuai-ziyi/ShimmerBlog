@@ -33,17 +33,21 @@ export const usePollingStore = defineStore('polling', () => {
  * @param fn        每次轮询要执行的异步任务（内部自行处理错误更稳妥）
  * @param intervalMs 轮询间隔（毫秒）
  * @param shouldRun 额外的跳过条件（如「当前不在目标 tab」）；返回 false 时本次不执行
+ * @param enabled   整体开关（如「已登录」）；返回 false 时不创建定时器。
+ *                  开关变化时由调用方调用返回的 start()/stop() 启停。
  */
 export function useSilentPolling(
   fn: () => Promise<unknown>,
   intervalMs = 5000,
   shouldRun?: () => boolean,
+  enabled?: () => boolean,
 ) {
   const polling = usePollingStore();
   let timer: ReturnType<typeof setInterval> | undefined;
 
   async function tick() {
     if (typeof document !== 'undefined' && document.hidden) return;
+    if (enabled && !enabled()) return;
     if (shouldRun && !shouldRun()) return;
     try {
       await polling.track(fn);
@@ -54,6 +58,8 @@ export function useSilentPolling(
 
   function start() {
     if (timer !== undefined) return;
+    // 开关关闭时不创建定时器（如未登录时的登录门：轮询会打出 401）
+    if (enabled && !enabled()) return;
     timer = setInterval(tick, intervalMs);
   }
 
