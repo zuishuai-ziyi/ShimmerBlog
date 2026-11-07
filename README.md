@@ -36,7 +36,7 @@ ShimmerBlog/
 │       ├── stores/         # auth（登录态）· site（站点配置）
 │       ├── styles/tokens.css  # 9 色板 + 玻璃变量
 │       └── api/http.ts     # axios 实例（自动带 Bearer）
-├── .github/workflows/      # deploy.yml：推 main 自动构建部署
+├── .github/workflows/      # deploy.yml：推 v* 标签自动构建部署
 ├── style.txt               # 配色来源
 └── logo.png
 ```
@@ -163,9 +163,26 @@ cd ../web && npm run build        # vue-tsc 类型检查 + 生产构建
 
 ## 部署（GitHub Actions 自动部署）
 
-推送到 `main` 即在 Actions 里构建并部署到 `192` 的 `/www/wwwroot/ShimmerBlog`（宝塔面板服务器），也可在 Actions 页面手动触发（`.github/workflows/deploy.yml`）。
+**只有推送 `v*` 标签才会触发部署**（`.github/workflows/deploy.yml` 的触发条件是 `on: push: tags: ['v*']`，普通 push 到 `main` 不触发）。触发后由 Actions 构建并部署到线上服务器（`blog.xiaoziyi.com`）的 `/www/wwwroot/ShimmerBlog`（宝塔面板服务器）；也可在 Actions 页面用 `workflow_dispatch` 手动触发（手动触发不会创建 Release）。
 
-一次部署做四件事（部署后服务器上的 `web/dist` 由 Node 直接托管，单端口 3010 同时提供 API 与前端）：`web` 上 `npm ci && npm run build` → `rsync` 后端源码与 `web/dist` 到服务器（`.env`、`node_modules`、`server/uploads`、日志既不覆盖也不删除）→ 服务器 `npm ci --omit=dev` 并重启宝塔 Node 项目 → `curl /api/health` 健康检查（失败即红并打印最近日志）。
+一次部署做四件事（部署后服务器上的 `web/dist` 由 Node 直接托管，单端口 3010 同时提供 API 与前端）：`web` 上 `npm ci && npm run build` → `rsync` 后端源码与 `web/dist` 到服务器（`.env`、`node_modules`、`server/uploads`、日志既不覆盖也不删除）→ 服务器 `npm ci --omit=dev` 并重启宝塔 Node 项目 → `curl /api/health` 健康检查（失败即红并打印最近日志）。部署成功后，若本次是 `v*` 标签触发，还会自动 `gh release create --generate-notes` 创建对应的 GitHub Release。
+
+### 发版三步（推送 `v*` 标签即部署）
+
+发布新版本号时，先把 `web/package.json`、`server/package.json` 与 `web/package-lock.json`、`server/package-lock.json` 的根级 `version` 一起改成目标版本（本仓库不会自动 bump，需手动同步这四处）。
+
+```bash
+# 1) 提交改动并推送 main
+git add <本次改动的文件>   # 或 git add -u（只收已跟踪文件的改动）
+git commit -m "chore: release vX.Y.Z"
+git push origin main
+
+# 2) 打带注释的版本标签
+git tag -a vX.Y.Z -m "release vX.Y.Z"
+
+# 3) 推送标签：触发 deploy.yml 构建部署，成功后自动创建 GitHub Release
+git push origin vX.Y.Z
+```
 
 ### 1. 仓库 Secrets
 
