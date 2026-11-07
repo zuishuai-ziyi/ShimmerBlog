@@ -35,6 +35,7 @@
           <button :class="{ on: tab === 'oauth' }" @click="tab = 'oauth'">第三方登录</button>
           <button :class="{ on: tab === 'users' }" @click="tab = 'users'">用户</button>
           <button :class="{ on: tab === 'articles' }" @click="tab = 'articles'">文章</button>
+          <button :class="{ on: tab === 'review' }" @click="tab = 'review'">审核</button>
         </nav>
         <div class="side-foot">
           <button class="ghost" @click="changePwd">改管理密码</button>
@@ -337,6 +338,230 @@
               <p v-if="!articles.length" class="hint">没有匹配的文章。</p>
             </div>
           </section>
+          <!-- ============ 审核 ============ -->
+          <section v-if="tab === 'review'" class="pane">
+            <!-- 审核流程 -->
+            <div class="card">
+              <h2>审核流程</h2>
+              <p class="hint">
+                启用后新发布的文章按阶段顺序送审。当前顺序：<b>{{ reviewStageLabel }}</b>；至少启用一个阶段才能保存。
+                只启用一个阶段时该阶段直接终审（通过即发布、拒绝即驳回），动作下拉不可修改。
+              </p>
+              <label class="row check"><input type="checkbox" v-model="reviewFlowEnabled" /><span>启用审核流程</span></label>
+
+              <div class="rv-stage">
+                <div class="rv-stage-head">
+                  <label class="row check"><input type="checkbox" v-model="aiEnabled" /><span>AI 审核</span></label>
+                  <div class="rv-order">
+                    <span class="dim">顺序</span>
+                    <label class="rv-opt"><input type="radio" name="rv-ai-order" :checked="aiOrder === 1" :disabled="!aiEnabled" @change="setAiOrder(1)" />第 1 步</label>
+                    <label class="rv-opt"><input type="radio" name="rv-ai-order" :checked="aiOrder === 2" :disabled="!aiEnabled" @change="setAiOrder(2)" />第 2 步</label>
+                  </div>
+                </div>
+                <label class="row"><span>通过后</span>
+                  <select :value="aiOnApprove" :disabled="!aiEnabled || onlyOneStage" @change="setAiApprove">
+                    <option value="final_approve">直接通过（终审）</option>
+                    <option value="next" :disabled="aiIsLast">交给下一阶段</option>
+                  </select>
+                </label>
+                <label class="row"><span>拒绝后</span>
+                  <select :value="aiOnReject" :disabled="!aiEnabled || onlyOneStage" @change="setAiReject">
+                    <option value="final_reject">直接拒绝（终审）</option>
+                    <option value="next" :disabled="aiIsLast">交给下一阶段</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="rv-stage">
+                <div class="rv-stage-head">
+                  <label class="row check"><input type="checkbox" v-model="humanEnabled" /><span>人工审核</span></label>
+                  <div class="rv-order">
+                    <span class="dim">顺序</span>
+                    <label class="rv-opt"><input type="radio" name="rv-human-order" :checked="humanOrder === 1" :disabled="!humanEnabled" @change="setHumanOrder(1)" />第 1 步</label>
+                    <label class="rv-opt"><input type="radio" name="rv-human-order" :checked="humanOrder === 2" :disabled="!humanEnabled" @change="setHumanOrder(2)" />第 2 步</label>
+                  </div>
+                </div>
+                <label class="row"><span>通过后</span>
+                  <select :value="humanOnApprove" :disabled="!humanEnabled || onlyOneStage" @change="setHumanApprove">
+                    <option value="final_approve">直接通过（终审）</option>
+                    <option value="next" :disabled="humanIsLast">交给下一阶段</option>
+                  </select>
+                </label>
+                <label class="row"><span>拒绝后</span>
+                  <select :value="humanOnReject" :disabled="!humanEnabled || onlyOneStage" @change="setHumanReject">
+                    <option value="final_reject">直接拒绝（终审）</option>
+                    <option value="next" :disabled="humanIsLast">交给下一阶段</option>
+                  </select>
+                </label>
+              </div>
+
+              <div class="ops inline">
+                <button class="primary" :disabled="saving || !reviewStages.length" @click="saveReviewFlow">{{ saving ? '保存中…' : '保存审核流程' }}</button>
+                <span v-if="flash && flashScope === 'flow'" class="flash">{{ flash }}</span>
+              </div>
+            </div>
+
+            <!-- AI 审核配置 -->
+            <div class="card">
+              <h2>AI 审核配置</h2>
+              <p class="hint">AI 审核使用兼容 OpenAI 协议的接口；API Key 留空表示保持原值不变，勾选「清除」则保存后清空已配置的 Key。</p>
+              <div class="grid">
+                <label class="row"><span>接口地址</span><input v-model.trim="reviewAiCfg.base_url" placeholder="https://api.openai.com/v1" autocomplete="off" /></label>
+                <label class="row"><span>API Key</span><input v-model="reviewAiCfg.api_key" type="password" :placeholder="aiKeySet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
+                <label class="row"><span>模型</span><input v-model.trim="reviewAiCfg.model" placeholder="gpt-4o-mini" autocomplete="off" /></label>
+                <label class="row"><span>思考强度</span>
+                  <select :value="reviewAiCfg.thinking" @change="setAiThinking">
+                    <option value="off">不使用</option>
+                    <option value="low">低</option>
+                    <option value="medium">中</option>
+                    <option value="high">高</option>
+                  </select>
+                </label>
+                <label class="row"><span>温度</span>
+                  <input :value="aiTemperature" type="number" min="0" max="2" step="0.1" @input="onAiTempInput($event)" />
+                </label>
+                <label class="row"><span>超时（秒）</span>
+                  <input :value="aiTimeout" type="number" min="5" max="300" step="1" @input="onAiTimeoutInput($event)" />
+                </label>
+              </div>
+              <label class="row check"><input type="checkbox" v-model="aiClearKey" /><span>清除已配置的 API Key（保存后生效）</span></label>
+
+              <div class="rv-strict">
+                <span class="dim">审核严格度</span>
+                <label class="rv-opt"><input type="radio" name="rv-strict" :checked="reviewAiCfg.strictness === 'loose'" @change="setStrictness('loose')" />宽松</label>
+                <label class="rv-opt"><input type="radio" name="rv-strict" :checked="reviewAiCfg.strictness === 'standard'" @change="setStrictness('standard')" />标准</label>
+                <label class="rv-opt"><input type="radio" name="rv-strict" :checked="reviewAiCfg.strictness === 'strict'" @change="setStrictness('strict')" />严格</label>
+                <label class="rv-opt"><input type="radio" name="rv-strict" :checked="reviewAiCfg.strictness === 'custom'" @change="setStrictness('custom')" />自定义</label>
+              </div>
+              <div v-if="reviewAiCfg.strictness === 'custom'" class="rv-custom">
+                <p class="hint">自定义审核标准：以下内容将作为审核标准的全文发送给 AI。</p>
+                <textarea v-model="reviewAiCfg.custom_prompt" class="ta mono" rows="6" spellcheck="false" placeholder="例如：拒绝人身攻击、泄露他人隐私、虚假广告等内容……" />
+              </div>
+
+              <div class="ops inline">
+                <button class="primary" :disabled="saving" @click="saveReviewAi">{{ saving ? '保存中…' : '保存 AI 配置' }}</button>
+                <button class="ghost" :disabled="aiTestBusy" @click="openAiTest">{{ aiTestBusy ? '测试中…' : '测试 AI 审核' }}</button>
+                <span v-if="flash && flashScope === 'ai'" class="flash">{{ flash }}</span>
+              </div>
+            </div>
+
+            <!-- 审核员管理 -->
+            <div class="card">
+              <h2>审核员管理 <small>{{ reviewers.length }} 人</small></h2>
+              <div class="rv-new">
+                <input v-model.trim="reviewerForm.username" placeholder="用户名" autocomplete="off" />
+                <input v-model.trim="reviewerForm.display_name" placeholder="显示名（可选）" autocomplete="off" />
+                <input v-model.trim="reviewerForm.email" type="email" placeholder="邮箱（可选，用于接收审核通知）" autocomplete="off" />
+                <input v-model="reviewerForm.password" type="password" placeholder="初始密码（8-72 位）" autocomplete="new-password" />
+                <button class="primary" :disabled="reviewerBusy" @click="createReviewer">{{ reviewerBusy ? '创建中…' : '新增审核员' }}</button>
+              </div>
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>ID</th><th>用户名</th><th>显示名</th><th>邮箱</th><th>状态</th><th>创建时间</th><th>最后登录</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in reviewers" :key="r.id">
+                      <td class="dim">{{ r.id }}</td>
+                      <td>{{ r.username }}</td>
+                      <td>{{ r.display_name || '—' }}</td>
+                      <td>
+                        <span v-if="r.email">{{ r.email }}</span>
+                        <span v-else class="dim">未设置</span>
+                      </td>
+                      <td>
+                        <button class="pill" :class="r.status" @click="toggleReviewer(r)">
+                          {{ r.status === 'active' ? '正常' : '已禁用' }}
+                        </button>
+                      </td>
+                      <td class="dim">{{ fmtDate(r.created_at) }}</td>
+                      <td class="dim">{{ r.last_login_at ? fmtDateTime(r.last_login_at) : '从未登录' }}</td>
+                      <td class="row-ops">
+                        <button class="ghost sm" @click="openSetEmail(r)">设置邮箱</button>
+                        <button class="ghost sm" @click="openResetPwd(r)">重置密码</button>
+                        <button class="ghost sm danger" @click="removeReviewer(r)">删除</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-if="!reviewers.length" class="hint">还没有审核员。</p>
+              <div class="ops inline">
+                <button class="ghost sm" @click="loadReviewers">刷新列表</button>
+                <span v-if="flash && flashScope === 'reviewer'" class="flash">{{ flash }}</span>
+              </div>
+            </div>
+
+            <!-- 审核记录 -->
+            <div class="card">
+              <div class="list-head">
+                <h2>审核记录 <small>{{ recordTotal }} 条</small></h2>
+                <button class="ghost sm" :disabled="recordsBusy" @click="loadRecords()">{{ recordsBusy ? '加载中…' : '刷新' }}</button>
+              </div>
+              <div class="rv-filters">
+                <label class="rv-filter">
+                  <span class="dim">状态</span>
+                  <select :value="recordStatus" @change="setRecordStatus">
+                    <option value="all">全部</option>
+                    <option value="pending">待审核</option>
+                    <option value="approved">已通过</option>
+                    <option value="rejected">已拒绝</option>
+                    <option value="cancelled">已取消</option>
+                  </select>
+                </label>
+                <label class="rv-filter">
+                  <span class="dim">阶段</span>
+                  <select :value="recordStage" @change="setRecordStage">
+                    <option value="all">全部</option>
+                    <option value="ai">AI 审核</option>
+                    <option value="human">人工审核</option>
+                  </select>
+                </label>
+              </div>
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>ID</th><th>标题</th><th>作者</th><th>文章状态</th><th>记录状态</th><th>阶段</th><th>AI 结果</th><th>审核员</th><th>创建时间</th><th>决定时间</th><th>操作</th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="r in records" :key="r.id">
+                      <td class="dim">{{ r.id }}</td>
+                      <td class="title-cell"><a :href="`/article/${r.article_id}`" target="_blank">{{ r.title }}</a></td>
+                      <td>{{ r.author_name }}</td>
+                      <td><span class="pill" :class="r.article_status">{{ r.article_status }}</span></td>
+                      <td><span class="pill" :class="r.status">{{ recordStatusText(r.status) }}</span></td>
+                      <td>{{ r.stage ? stageText(r.stage) : '—' }}</td>
+                      <td class="rv-ai">
+                        <template v-if="r.ai_error">
+                          <span class="rv-err">出错：{{ r.ai_error }}</span>
+                        </template>
+                        <template v-else-if="r.ai_verdict">
+                          <div>{{ r.ai_verdict }}</div>
+                          <div v-if="r.ai_reason" class="dim">{{ r.ai_reason }}</div>
+                        </template>
+                        <span v-else class="dim">—</span>
+                      </td>
+                      <td class="dim">{{ r.reviewer_id ?? '—' }}</td>
+                      <td class="dim">{{ fmtDateTime(r.created_at) }}</td>
+                      <td class="dim">{{ r.decided_at ? fmtDateTime(r.decided_at) : '—' }}</td>
+                      <td class="row-ops">
+                        <button v-if="r.status === 'pending' && r.stage === 'ai' && r.ai_error" class="ghost sm" @click="retryAi(r)">重试 AI</button>
+                        <button v-if="r.status === 'pending'" class="ghost sm" @click="forceApprove(r)">强制通过</button>
+                        <button v-if="r.status === 'pending'" class="ghost sm danger" @click="openForceReject(r)">强制拒绝</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
+              <p v-if="!records.length" class="hint">没有匹配的审核记录。</p>
+              <div class="rv-pager">
+                <button class="ghost sm" :disabled="recordPage <= 1" @click="gotoRecordPage(recordPage - 1)">上一页</button>
+                <span class="dim">第 {{ recordPage }} / {{ recordTotalPages }} 页</span>
+                <button class="ghost sm" :disabled="recordPage >= recordTotalPages" @click="gotoRecordPage(recordPage + 1)">下一页</button>
+                <span v-if="flash && flashScope === 'record'" class="flash">{{ flash }}</span>
+              </div>
+            </div>
+          </section>
         </main>
         <SiteFooter tone="light" />
       </div>
@@ -369,15 +594,72 @@
         <p v-if="editMsg" class="hint">{{ editMsg }}</p>
       </div>
     </div>
+
+    <!-- 测试 AI 审核弹层 -->
+    <div v-if="aiTestOpen" class="modal-mask" @click.self="aiTestOpen = false">
+      <div class="modal wide">
+        <h3>测试 AI 审核</h3>
+        <input v-model.trim="aiTestTitle" placeholder="标题（可选）" />
+        <textarea v-model="aiTestContent" class="ta mono" rows="6" placeholder="粘贴要送审的正文内容…" />
+        <div class="modal-ops">
+          <button class="ghost" @click="aiTestOpen = false">关闭</button>
+          <button class="primary" :disabled="aiTestBusy" @click="runAiTest">{{ aiTestBusy ? '测试中…' : '开始测试' }}</button>
+        </div>
+        <p v-if="aiTestResult" class="hint rv-pre" :class="{ ok: aiTestOk }">{{ aiTestResult }}</p>
+      </div>
+    </div>
+
+    <!-- 重置审核员密码弹层 -->
+    <div v-if="rwdOpen" class="modal-mask" @click.self="rwdOpen = false">
+      <div class="modal">
+        <h3>重置审核员密码</h3>
+        <p class="hint">{{ rwdTarget?.username }}</p>
+        <input v-model="rwdValue" type="password" placeholder="新密码（8-72 位）" autocomplete="new-password" />
+        <div class="modal-ops">
+          <button class="ghost" @click="rwdOpen = false">取消</button>
+          <button class="primary" @click="submitResetPwd">保存</button>
+        </div>
+        <p v-if="rwdMsg" class="hint">{{ rwdMsg }}</p>
+      </div>
+    </div>
+
+    <!-- 设置审核员邮箱弹层 -->
+    <div v-if="emOpen" class="modal-mask" @click.self="emOpen = false">
+      <div class="modal">
+        <h3>设置审核员邮箱</h3>
+        <p class="hint">{{ emTarget?.username }}</p>
+        <input v-model.trim="emValue" type="email" placeholder="邮箱（留空表示不接收通知邮件）" autocomplete="off" />
+        <div class="modal-ops">
+          <button class="ghost" @click="emOpen = false">取消</button>
+          <button class="primary" @click="submitSetEmail">保存</button>
+        </div>
+        <p v-if="emMsg" class="hint">{{ emMsg }}</p>
+      </div>
+    </div>
+
+    <!-- 强制拒绝弹层 -->
+    <div v-if="rejectOpen" class="modal-mask" @click.self="rejectOpen = false">
+      <div class="modal">
+        <h3>强制拒绝</h3>
+        <p class="hint">{{ rejectTarget?.title }}</p>
+        <textarea v-model="rejectNote" class="ta mono" rows="4" placeholder="拒绝理由（可选）" />
+        <div class="modal-ops">
+          <button class="ghost" @click="rejectOpen = false">取消</button>
+          <button class="primary" @click="submitForceReject">确认拒绝</button>
+        </div>
+        <p v-if="rejectMsg" class="hint">{{ rejectMsg }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { onMounted, reactive, ref } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import adminHttp, { errMsg } from '../api/adminHttp';
 import { isCaptchaFailure } from '../api/http';
 import { useAdminStore } from '../stores/admin';
 import { useSiteStore } from '../stores/site';
+import { useSilentPolling } from '../stores/polling';
 import SiteFooter from '../components/SiteFooter.vue';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import defaultAvatar from '../assets/default-avatar.svg';
@@ -386,7 +668,7 @@ const admin = useAdminStore();
 // 已有本地令牌时先进入「验证中」态，避免过期令牌先渲染后台内容再跳回登录门
 const booting = ref(!!admin.token && !admin.checked);
 
-type Tab = 'site' | 'mail' | 'oauth' | 'users' | 'articles';
+type Tab = 'site' | 'mail' | 'oauth' | 'users' | 'articles' | 'review';
 const tab = ref<Tab>('site');
 
 /* ---- 登录门 ---- */
@@ -463,6 +745,8 @@ async function savePwd() {
 /* ---- 通用保存 ---- */
 const saving = ref(false);
 const flash = ref('');
+/** flash 展示位置（site/mail/... 用空串；审核区按区块区分，避免多个提示同时出现） */
+const flashScope = ref('');
 let flashTimer: ReturnType<typeof setTimeout> | undefined;
 
 function showFlash(msg: string) {
@@ -571,29 +855,37 @@ async function bootstrap() {
   captchaOn.value = !!data.captchaEnabled;
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
+  applyReviewSettings((data.settings ?? {}) as Record<string, unknown>);
   settingsReady.value = true;
 }
 
-async function saveSettings(keys: string[]) {
+async function saveSettings(keys: string[]): Promise<boolean> {
   if (!settingsReady.value) {
     showFlash('配置尚未加载完成，请刷新页面后再保存');
-    return;
+    return false;
   }
   saving.value = true;
   try {
     const body: Record<string, unknown> = {};
     for (const k of keys) {
-      body[k] = (siteForm as Record<string, unknown>)[k] ?? mailForm[k] ?? (oauthForm as Record<string, unknown>)[k];
+      body[k] =
+        (siteForm as Record<string, unknown>)[k] ??
+        (mailForm as Record<string, unknown>)[k] ??
+        (oauthForm as Record<string, unknown>)[k] ??
+        (reviewSettingsForm as Record<string, unknown>)[k];
     }
-    body.smtp_secure = smtpSecureBool.value;
+    // 只有本次提交涉及 smtp_secure 时才带上，避免保存审核设置时误改邮件开关
+    if (keys.includes('smtp_secure')) body.smtp_secure = smtpSecureBool.value;
     const { data } = await adminHttp.put('/admin/settings', body);
     smtpEnabled.value = !!data.smtpEnabled;
     githubEnabled.value = !!data.githubEnabled;
     googleEnabled.value = !!data.googleEnabled;
     if (logoUrl.value && keys.includes('site_title')) await refreshSite();
     showFlash('✓ 已保存');
+    return true;
   } catch (e) {
     showFlash('保存失败：' + errMsg(e));
+    return false;
   } finally {
     saving.value = false;
   }
@@ -601,7 +893,7 @@ async function saveSettings(keys: string[]) {
 
 async function saveMailSettings() {
   const keys = mailTemplates.value.flatMap((t) => [t.subjectKey, t.bodyKey]);
-  await saveSettings([...keys, 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass']);
+  await saveSettings([...keys, 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass', 'smtp_secure']);
 }
 
 async function saveOauthSettings() {
@@ -765,13 +1057,32 @@ const userTotal = ref(0);
 const userQuery = ref('');
 let userSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
-async function loadUsers() {
+/** 服务端最近一次返回的用户名称颜色（用于轮询时识别行内未保存的改色） */
+const userColorSnapshot = new Map<number, string | null>();
+
+/**
+ * 加载用户列表。
+ * silent=true 用于轮询：失败不弹提示，且保留用户行内尚未保存的改色（不重建编辑状态）。
+ */
+async function loadUsers(silent = false) {
   try {
     const { data } = await adminHttp.get('/admin/users', { params: { q: userQuery.value || undefined } });
-    users.value = data.items;
+    const items = (data.items || []) as AdminUser[];
+    if (silent) {
+      // 本地值与服务端快照不一致 → 视为用户尚未保存的行内改色，保留本地值
+      const prev = new Map(users.value.map((u) => [u.id, u]));
+      users.value = items.map((u) => {
+        const old = prev.get(u.id);
+        const localChanged = !!old && old.name_color !== userColorSnapshot.get(u.id);
+        return localChanged ? { ...u, name_color: old.name_color } : u;
+      });
+    } else {
+      users.value = items;
+    }
+    for (const u of items) userColorSnapshot.set(u.id, u.name_color);
     userTotal.value = data.total;
   } catch (e) {
-    showFlash(errMsg(e));
+    if (!silent) showFlash(errMsg(e));
   }
 }
 
@@ -884,13 +1195,14 @@ const articleTotal = ref(0);
 const articleQuery = ref('');
 let articleSearchTimer: ReturnType<typeof setTimeout> | undefined;
 
-async function loadArticles() {
+/** 加载文章列表；silent=true 用于轮询（失败不弹提示） */
+async function loadArticles(silent = false) {
   try {
     const { data } = await adminHttp.get('/admin/articles', { params: { q: articleQuery.value || undefined } });
     articles.value = data.items;
     articleTotal.value = data.total;
   } catch (e) {
-    showFlash(errMsg(e));
+    if (!silent) showFlash(errMsg(e));
   }
 }
 
@@ -918,6 +1230,655 @@ async function deleteArticle(a: AdminArticle) {
     showFlash('删除失败：' + errMsg(e));
   }
 }
+
+/* ==================== 审核：流程 / AI 配置 / 审核员 / 审核记录 ==================== */
+type ReviewStage = 'ai' | 'human';
+type ReviewApproveAction = 'final_approve' | 'next';
+type ReviewRejectAction = 'final_reject' | 'next';
+type ReviewThinking = 'off' | 'low' | 'medium' | 'high';
+type ReviewStrictness = 'loose' | 'standard' | 'strict' | 'custom';
+type RecordStatusFilter = 'all' | 'pending' | 'approved' | 'rejected' | 'cancelled';
+type StageFilter = 'all' | 'ai' | 'human';
+
+interface ReviewFlowCfg {
+  enabled: boolean;
+  stages: ReviewStage[];
+  ai: { on_approve: ReviewApproveAction; on_reject: ReviewRejectAction };
+  human: { on_approve: ReviewApproveAction; on_reject: ReviewRejectAction };
+}
+
+interface ReviewAiCfg {
+  base_url: string;
+  api_key: string;
+  model: string;
+  thinking: ReviewThinking;
+  temperature: number;
+  timeout_seconds: number;
+  strictness: ReviewStrictness;
+  custom_prompt: string;
+}
+
+interface Reviewer {
+  id: number;
+  username: string;
+  display_name: string | null;
+  email: string | null;
+  status: 'active' | 'disabled';
+  created_at: string;
+  last_login_at: string | null;
+}
+
+interface ReviewRecord {
+  id: number;
+  article_id: number;
+  article_status: string;
+  author_name: string;
+  title: string;
+  status: 'pending' | 'approved' | 'rejected' | 'cancelled';
+  stages: string[];
+  stage: 'ai' | 'human' | null;
+  ai_verdict: string | null;
+  ai_reason: string | null;
+  ai_error: string | null;
+  reviewer_id: number | null;
+  reject_note: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+/* ---- 通用小工具 ---- */
+function selValue(ev: Event): string {
+  const t = ev.target as HTMLSelectElement | null;
+  return t ? t.value : '';
+}
+function toNum(v: unknown, fallback: number): number {
+  const n = typeof v === 'number' ? v : Number(v);
+  return Number.isFinite(n) ? n : fallback;
+}
+function clampNum(v: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(v)) return fallback;
+  return Math.min(max, Math.max(min, v));
+}
+function boolOf(v: unknown, fallback = false): boolean {
+  if (typeof v === 'boolean') return v;
+  if (typeof v === 'number') return v !== 0;
+  if (typeof v === 'string') return v === '1' || v.toLowerCase() === 'true';
+  return fallback;
+}
+function parseJsonObj(raw: unknown): Record<string, unknown> | null {
+  if (raw && typeof raw === 'object') return raw as Record<string, unknown>;
+  if (typeof raw !== 'string' || !raw.trim()) return null;
+  try {
+    const v = JSON.parse(raw) as unknown;
+    return v && typeof v === 'object' ? (v as Record<string, unknown>) : null;
+  } catch {
+    return null;
+  }
+}
+/** 后端部分接口用 { message } 返回错误（如 ai-test 的 400） */
+function revErr(e: unknown): string {
+  if (e && typeof e === 'object') {
+    const data = (e as { response?: { data?: { message?: string; error?: string } } }).response?.data;
+    if (data?.message) return data.message;
+    if (data?.error) return data.error;
+  }
+  return errMsg(e);
+}
+function fmtDateTime(s: string | null | undefined): string {
+  if (!s) return '—';
+  const d = new Date(s);
+  if (Number.isNaN(d.getTime())) return '—';
+  const p = (n: number) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())} ${p(d.getHours())}:${p(d.getMinutes())}`;
+}
+function stageText(s: string | null | undefined): string {
+  if (s === 'ai') return 'AI 审核';
+  if (s === 'human') return '人工审核';
+  return '—';
+}
+function recordStatusText(s: string | null | undefined): string {
+  if (s === 'pending') return '待审核';
+  if (s === 'approved') return '已通过';
+  if (s === 'rejected') return '已拒绝';
+  if (s === 'cancelled') return '已取消';
+  return s || '—';
+}
+
+/* ---- 审核流程 ---- */
+const reviewSettingsForm = reactive({ review_flow: '', review_ai: '' });
+const reviewFlowEnabled = ref(false);
+const aiEnabled = ref(false);
+const humanEnabled = ref(false);
+const aiOrder = ref(1);
+const humanOrder = ref(2);
+const aiOnApprove = ref<ReviewApproveAction>('final_approve');
+const aiOnReject = ref<ReviewRejectAction>('final_reject');
+const humanOnApprove = ref<ReviewApproveAction>('final_approve');
+const humanOnReject = ref<ReviewRejectAction>('final_reject');
+
+const reviewStages = computed<ReviewStage[]>(() => {
+  const list: ReviewStage[] = [];
+  if (aiEnabled.value) list.push('ai');
+  if (humanEnabled.value) list.push('human');
+  const pos = (s: ReviewStage) => (s === 'ai' ? aiOrder.value : humanOrder.value);
+  list.sort((a, b) => pos(a) - pos(b));
+  return list;
+});
+const onlyOneStage = computed(() => reviewStages.value.length <= 1);
+const aiIsLast = computed(() => {
+  const s = reviewStages.value;
+  return s.length > 0 && s[s.length - 1] === 'ai';
+});
+const humanIsLast = computed(() => {
+  const s = reviewStages.value;
+  return s.length > 0 && s[s.length - 1] === 'human';
+});
+const reviewStageLabel = computed(() => {
+  const s = reviewStages.value;
+  return s.length ? s.map(stageText).join(' → ') : '未启用任何阶段';
+});
+
+/** 只有一个阶段时固定终审；最后阶段的 next 归一化为终审（后端亦会归一化） */
+function normalizeStageActions() {
+  if (onlyOneStage.value) {
+    if (aiEnabled.value) {
+      aiOnApprove.value = 'final_approve';
+      aiOnReject.value = 'final_reject';
+    }
+    if (humanEnabled.value) {
+      humanOnApprove.value = 'final_approve';
+      humanOnReject.value = 'final_reject';
+    }
+    return;
+  }
+  if (aiIsLast.value) {
+    if (aiOnApprove.value === 'next') aiOnApprove.value = 'final_approve';
+    if (aiOnReject.value === 'next') aiOnReject.value = 'final_reject';
+  }
+  if (humanIsLast.value) {
+    if (humanOnApprove.value === 'next') humanOnApprove.value = 'final_approve';
+    if (humanOnReject.value === 'next') humanOnReject.value = 'final_reject';
+  }
+}
+
+function setAiOrder(n: number) {
+  aiOrder.value = n;
+  if (humanEnabled.value && humanOrder.value === n) humanOrder.value = n === 1 ? 2 : 1;
+  normalizeStageActions();
+}
+function setHumanOrder(n: number) {
+  humanOrder.value = n;
+  if (aiEnabled.value && aiOrder.value === n) aiOrder.value = n === 1 ? 2 : 1;
+  normalizeStageActions();
+}
+function setAiApprove(ev: Event) {
+  aiOnApprove.value = selValue(ev) === 'next' ? 'next' : 'final_approve';
+}
+function setAiReject(ev: Event) {
+  aiOnReject.value = selValue(ev) === 'next' ? 'next' : 'final_reject';
+}
+function setHumanApprove(ev: Event) {
+  humanOnApprove.value = selValue(ev) === 'next' ? 'next' : 'final_approve';
+}
+function setHumanReject(ev: Event) {
+  humanOnReject.value = selValue(ev) === 'next' ? 'next' : 'final_reject';
+}
+
+function buildReviewFlow(): ReviewFlowCfg {
+  normalizeStageActions();
+  return {
+    enabled: reviewFlowEnabled.value,
+    stages: reviewStages.value,
+    ai: { on_approve: aiOnApprove.value, on_reject: aiOnReject.value },
+    human: { on_approve: humanOnApprove.value, on_reject: humanOnReject.value },
+  };
+}
+
+async function saveReviewFlow() {
+  flashScope.value = 'flow';
+  if (!reviewStages.value.length) {
+    showFlash('至少启用一个审核阶段');
+    return;
+  }
+  reviewSettingsForm.review_flow = JSON.stringify(buildReviewFlow());
+  const ok = await saveSettings(['review_flow']);
+  if (!ok) return;
+  await loadReviewSettings();
+  showFlash('✓ 审核流程已保存');
+}
+
+/* ---- AI 审核配置 ---- */
+const reviewAiCfg = reactive<ReviewAiCfg>({
+  base_url: '',
+  api_key: '',
+  model: '',
+  thinking: 'off',
+  temperature: 0.7,
+  timeout_seconds: 60,
+  strictness: 'standard',
+  custom_prompt: '',
+});
+const aiKeySet = ref(false);
+const aiClearKey = ref(false);
+const aiTemperature = ref('0.7');
+const aiTimeout = ref('60');
+
+function setAiThinking(ev: Event) {
+  const v = selValue(ev);
+  reviewAiCfg.thinking = v === 'low' || v === 'medium' || v === 'high' ? v : 'off';
+}
+function setStrictness(v: string) {
+  reviewAiCfg.strictness = v === 'loose' || v === 'strict' || v === 'custom' ? v : 'standard';
+}
+function onAiTempInput(ev: Event) {
+  aiTemperature.value = (ev.target as HTMLInputElement).value;
+}
+function onAiTimeoutInput(ev: Event) {
+  aiTimeout.value = (ev.target as HTMLInputElement).value;
+}
+
+function buildReviewAi(): ReviewAiCfg {
+  const typed = reviewAiCfg.api_key.trim();
+  return {
+    base_url: reviewAiCfg.base_url.trim(),
+    // '' = 保持原值；__CLEAR__ = 清空；其他 = 新值
+    api_key: aiClearKey.value ? '__CLEAR__' : typed,
+    model: reviewAiCfg.model.trim(),
+    thinking: reviewAiCfg.thinking,
+    temperature: clampNum(toNum(aiTemperature.value, 0.7), 0, 2, 0.7),
+    timeout_seconds: Math.round(clampNum(toNum(aiTimeout.value, 60), 5, 300, 60)),
+    strictness: reviewAiCfg.strictness,
+    custom_prompt: reviewAiCfg.custom_prompt,
+  };
+}
+
+async function saveReviewAi() {
+  flashScope.value = 'ai';
+  reviewSettingsForm.review_ai = JSON.stringify(buildReviewAi());
+  const ok = await saveSettings(['review_ai']);
+  if (!ok) return;
+  await loadReviewSettings();
+  showFlash('✓ AI 审核配置已保存');
+}
+
+/* ---- AI 审核测试 ---- */
+const aiTestOpen = ref(false);
+const aiTestTitle = ref('');
+const aiTestContent = ref('');
+const aiTestBusy = ref(false);
+const aiTestResult = ref('');
+const aiTestOk = ref(false);
+
+function openAiTest() {
+  aiTestTitle.value = '';
+  aiTestContent.value = '';
+  aiTestResult.value = '';
+  aiTestOk.value = false;
+  aiTestOpen.value = true;
+}
+
+async function runAiTest() {
+  if (!aiTestContent.value.trim()) {
+    aiTestOk.value = false;
+    aiTestResult.value = '请先输入要测试的正文内容。';
+    return;
+  }
+  aiTestBusy.value = true;
+  aiTestResult.value = '';
+  try {
+    const { data } = await adminHttp.post('/admin/review/ai-test', {
+      title: aiTestTitle.value || undefined,
+      content: aiTestContent.value,
+    });
+    aiTestOk.value = true;
+    aiTestResult.value = [
+      `结论：${data.verdict ?? '—'}`,
+      `理由：${data.reason ?? '—'}`,
+      `置信度：${data.confidence ?? '—'}`,
+      `模型：${data.model ?? '—'}`,
+    ].join('\n');
+  } catch (e) {
+    aiTestOk.value = false;
+    aiTestResult.value = '测试失败：' + revErr(e);
+  } finally {
+    aiTestBusy.value = false;
+  }
+}
+
+/* ---- 审核员管理 ---- */
+const reviewers = ref<Reviewer[]>([]);
+const reviewerForm = reactive({ username: '', password: '', display_name: '', email: '' });
+const reviewerBusy = ref(false);
+
+async function loadReviewers() {
+  try {
+    const { data } = await adminHttp.get('/admin/reviewers');
+    reviewers.value = Array.isArray(data.reviewers) ? (data.reviewers as Reviewer[]) : [];
+  } catch (e) {
+    flashScope.value = 'reviewer';
+    showFlash('审核员列表加载失败：' + revErr(e));
+  }
+}
+
+async function createReviewer() {
+  flashScope.value = 'reviewer';
+  const username = reviewerForm.username.trim();
+  if (!username || !reviewerForm.password) {
+    showFlash('用户名与初始密码不能为空');
+    return;
+  }
+  if (username.length < 3 || username.length > 50) {
+    showFlash('用户名长度需在 3-50 字之间');
+    return;
+  }
+  if (reviewerForm.password.length < 8 || reviewerForm.password.length > 72) {
+    showFlash('初始密码长度需在 8-72 位之间');
+    return;
+  }
+  // 邮箱（可选）：宽松校验，与后端 EMAIL_RE 规则一致
+  const email = reviewerForm.email.trim();
+  if (email && (!email.includes('@') || !email.includes('.'))) {
+    showFlash('邮箱格式不正确');
+    return;
+  }
+  if (email.length > 255) {
+    showFlash('邮箱最长 255 字');
+    return;
+  }
+  reviewerBusy.value = true;
+  try {
+    await adminHttp.post('/admin/reviewers', {
+      username,
+      password: reviewerForm.password,
+      display_name: reviewerForm.display_name.trim() || undefined,
+      email: email || undefined,
+    });
+    reviewerForm.username = '';
+    reviewerForm.password = '';
+    reviewerForm.display_name = '';
+    reviewerForm.email = '';
+    showFlash('✓ 已新增审核员');
+    await loadReviewers();
+  } catch (e) {
+    showFlash('新增失败：' + revErr(e));
+  } finally {
+    reviewerBusy.value = false;
+  }
+}
+
+async function toggleReviewer(r: Reviewer) {
+  const next = r.status === 'active' ? 'disabled' : 'active';
+  try {
+    await adminHttp.put(`/admin/reviewers/${r.id}`, { status: next });
+    r.status = next;
+    flashScope.value = 'reviewer';
+    showFlash(next === 'active' ? '✓ 已启用该审核员' : '已禁用该审核员');
+  } catch (e) {
+    flashScope.value = 'reviewer';
+    showFlash('操作失败：' + revErr(e));
+  }
+}
+
+const rwdOpen = ref(false);
+const rwdTarget = ref<Reviewer | null>(null);
+const rwdValue = ref('');
+const rwdMsg = ref('');
+
+function openResetPwd(r: Reviewer) {
+  rwdTarget.value = r;
+  rwdValue.value = '';
+  rwdMsg.value = '';
+  rwdOpen.value = true;
+}
+
+async function submitResetPwd() {
+  if (!rwdTarget.value) return;
+  if (rwdValue.value.length < 8 || rwdValue.value.length > 72) {
+    rwdMsg.value = '新密码长度需在 8-72 位之间';
+    return;
+  }
+  try {
+    await adminHttp.put(`/admin/reviewers/${rwdTarget.value.id}`, { password: rwdValue.value });
+    rwdMsg.value = '已重置密码';
+    flashScope.value = 'reviewer';
+    showFlash('✓ 已重置密码');
+    setTimeout(() => (rwdOpen.value = false), 700);
+  } catch (e) {
+    rwdMsg.value = '重置失败：' + revErr(e);
+  }
+}
+
+const emOpen = ref(false);
+const emTarget = ref<Reviewer | null>(null);
+const emValue = ref('');
+const emMsg = ref('');
+
+/** 打开「设置邮箱」弹层，预填当前邮箱 */
+function openSetEmail(r: Reviewer) {
+  emTarget.value = r;
+  emValue.value = r.email || '';
+  emMsg.value = '';
+  emOpen.value = true;
+}
+
+/** 保存审核员邮箱：留空即清空（后端置 NULL，该审核员不再接收通知邮件） */
+async function submitSetEmail() {
+  if (!emTarget.value) return;
+  const em = emValue.value.trim();
+  if (em && (!em.includes('@') || !em.includes('.'))) {
+    emMsg.value = '邮箱格式不正确';
+    return;
+  }
+  if (em.length > 255) {
+    emMsg.value = '邮箱最长 255 字';
+    return;
+  }
+  try {
+    const { data } = await adminHttp.put(`/admin/reviewers/${emTarget.value.id}`, { email: em });
+    const updated = data?.reviewer as Reviewer | undefined;
+    if (updated) emTarget.value.email = updated.email ?? null;
+    emMsg.value = '已保存';
+    flashScope.value = 'reviewer';
+    showFlash('✓ 已保存邮箱');
+    setTimeout(() => (emOpen.value = false), 700);
+  } catch (e) {
+    emMsg.value = '保存失败：' + revErr(e);
+  }
+}
+
+async function removeReviewer(r: Reviewer) {
+  if (!confirm(`确定删除审核员「${r.username}」？该操作不可恢复。`)) return;
+  try {
+    await adminHttp.delete(`/admin/reviewers/${r.id}`);
+    reviewers.value = reviewers.value.filter((x) => x.id !== r.id);
+    flashScope.value = 'reviewer';
+    showFlash('✓ 已删除审核员');
+  } catch (e) {
+    flashScope.value = 'reviewer';
+    showFlash('删除失败：' + revErr(e));
+  }
+}
+
+/* ---- 审核记录 ---- */
+const records = ref<ReviewRecord[]>([]);
+const recordTotal = ref(0);
+const recordPage = ref(1);
+const recordPageSize = ref(20);
+const recordStatus = ref<RecordStatusFilter>('all');
+const recordStage = ref<StageFilter>('all');
+const recordsBusy = ref(false);
+const recordTotalPages = computed(() => Math.max(1, Math.ceil(recordTotal.value / recordPageSize.value)));
+
+async function loadRecords(silent = false) {
+  if (!silent) recordsBusy.value = true;
+  try {
+    const { data } = await adminHttp.get('/admin/review/records', {
+      params: { status: recordStatus.value, stage: recordStage.value, page: recordPage.value },
+    });
+    records.value = Array.isArray(data.items) ? (data.items as ReviewRecord[]) : [];
+    recordTotal.value = Number(data.total ?? 0);
+    if (data.pageSize) recordPageSize.value = Number(data.pageSize);
+    if (data.page) recordPage.value = Number(data.page);
+  } catch (e) {
+    if (!silent) {
+      flashScope.value = 'record';
+      showFlash('审核记录加载失败：' + revErr(e));
+    }
+  } finally {
+    if (!silent) recordsBusy.value = false;
+  }
+}
+
+function setRecordStatus(ev: Event) {
+  const v = selValue(ev);
+  recordStatus.value =
+    v === 'pending' || v === 'approved' || v === 'rejected' || v === 'cancelled' ? v : 'all';
+  recordPage.value = 1;
+  loadRecords();
+}
+function setRecordStage(ev: Event) {
+  const v = selValue(ev);
+  recordStage.value = v === 'ai' || v === 'human' ? v : 'all';
+  recordPage.value = 1;
+  loadRecords();
+}
+function gotoRecordPage(p: number) {
+  const max = recordTotalPages.value;
+  recordPage.value = clampNum(Math.round(p), 1, max, 1);
+  loadRecords();
+}
+
+async function retryAi(r: ReviewRecord) {
+  try {
+    await adminHttp.post(`/admin/review/records/${r.id}/retry-ai`, {});
+    flashScope.value = 'record';
+    showFlash('✓ 已重新触发 AI 审核');
+    await loadRecords();
+  } catch (e) {
+    flashScope.value = 'record';
+    showFlash('重试失败：' + revErr(e));
+  }
+}
+
+async function forceApprove(r: ReviewRecord) {
+  if (!confirm(`确定强制通过「${r.title}」？`)) return;
+  try {
+    await adminHttp.post(`/admin/review/records/${r.id}/final`, { action: 'approve' });
+    flashScope.value = 'record';
+    showFlash('✓ 已强制通过');
+    await loadRecords();
+  } catch (e) {
+    flashScope.value = 'record';
+    showFlash('操作失败：' + revErr(e));
+  }
+}
+
+const rejectOpen = ref(false);
+const rejectTarget = ref<ReviewRecord | null>(null);
+const rejectNote = ref('');
+const rejectMsg = ref('');
+
+function openForceReject(r: ReviewRecord) {
+  rejectTarget.value = r;
+  rejectNote.value = '';
+  rejectMsg.value = '';
+  rejectOpen.value = true;
+}
+
+async function submitForceReject() {
+  if (!rejectTarget.value) return;
+  try {
+    await adminHttp.post(`/admin/review/records/${rejectTarget.value.id}/final`, {
+      action: 'reject',
+      note: rejectNote.value.trim() || undefined,
+    });
+    rejectOpen.value = false;
+    flashScope.value = 'record';
+    showFlash('✓ 已强制拒绝');
+    await loadRecords();
+  } catch (e) {
+    rejectMsg.value = '操作失败：' + revErr(e);
+  }
+}
+
+/* ---- 审核设置载入 ---- */
+function applyReviewFlow(raw: Record<string, unknown>) {
+  const rawStages = Array.isArray(raw.stages) ? raw.stages : [];
+  const stages = rawStages.filter((s): s is ReviewStage => s === 'ai' || s === 'human');
+  aiEnabled.value = stages.includes('ai');
+  humanEnabled.value = stages.includes('human');
+  const aiIdx = stages.indexOf('ai');
+  const humanIdx = stages.indexOf('human');
+  aiOrder.value = aiEnabled.value ? (aiIdx >= 0 ? aiIdx + 1 : 1) : 1;
+  humanOrder.value = humanEnabled.value ? (humanIdx >= 0 ? humanIdx + 1 : 2) : 2;
+  if (aiEnabled.value && humanEnabled.value && aiOrder.value === humanOrder.value) {
+    humanOrder.value = aiOrder.value === 1 ? 2 : 1;
+  }
+  reviewFlowEnabled.value = boolOf(raw.enabled);
+  const aiRaw = (raw.ai ?? {}) as Record<string, unknown>;
+  const humanRaw = (raw.human ?? {}) as Record<string, unknown>;
+  if (aiRaw.on_approve === 'final_approve' || aiRaw.on_approve === 'next') aiOnApprove.value = aiRaw.on_approve;
+  if (aiRaw.on_reject === 'final_reject' || aiRaw.on_reject === 'next') aiOnReject.value = aiRaw.on_reject;
+  if (humanRaw.on_approve === 'final_approve' || humanRaw.on_approve === 'next') humanOnApprove.value = humanRaw.on_approve;
+  if (humanRaw.on_reject === 'final_reject' || humanRaw.on_reject === 'next') humanOnReject.value = humanRaw.on_reject;
+  normalizeStageActions();
+}
+
+function applyReviewAi(raw: Record<string, unknown>) {
+  reviewAiCfg.base_url = typeof raw.base_url === 'string' ? raw.base_url : '';
+  const key = typeof raw.api_key === 'string' ? raw.api_key : '';
+  aiKeySet.value = key === '__KEEP__';
+  reviewAiCfg.api_key = '';
+  reviewAiCfg.model = typeof raw.model === 'string' ? raw.model : '';
+  const thinking = raw.thinking;
+  reviewAiCfg.thinking = thinking === 'low' || thinking === 'medium' || thinking === 'high' ? thinking : 'off';
+  reviewAiCfg.temperature = clampNum(toNum(raw.temperature, 0.7), 0, 2, 0.7);
+  reviewAiCfg.timeout_seconds = Math.round(clampNum(toNum(raw.timeout_seconds, 60), 5, 300, 60));
+  const strictness = raw.strictness;
+  reviewAiCfg.strictness =
+    strictness === 'loose' || strictness === 'strict' || strictness === 'custom' ? strictness : 'standard';
+  reviewAiCfg.custom_prompt = typeof raw.custom_prompt === 'string' ? raw.custom_prompt : '';
+  aiTemperature.value = String(reviewAiCfg.temperature);
+  aiTimeout.value = String(reviewAiCfg.timeout_seconds);
+  aiClearKey.value = false;
+}
+
+function applyReviewSettings(settings: Record<string, unknown>) {
+  const flow = parseJsonObj(settings.review_flow);
+  if (flow) applyReviewFlow(flow);
+  const ai = parseJsonObj(settings.review_ai);
+  if (ai) applyReviewAi(ai);
+}
+
+async function loadReviewSettings() {
+  try {
+    const { data } = await adminHttp.get('/admin/settings');
+    applyReviewSettings((data.settings ?? {}) as Record<string, unknown>);
+  } catch (e) {
+    showFlash('审核配置重新加载失败：' + revErr(e));
+  }
+}
+
+watch([aiEnabled, humanEnabled], () => normalizeStageActions());
+watch(tab, (t) => {
+  if (t === 'review') {
+    loadReviewers();
+    loadRecords();
+  }
+});
+
+/* ---------------- 轮询（静默刷新，不重建表单状态） ---------------- */
+// 审核记录：5s。跳过：非审核 tab / 页面隐藏。
+// 不重跑 loadSettings / loadReviewSettings，不会覆盖未保存的审核流程与 AI 配置输入。
+useSilentPolling(() => loadRecords(true), 5000, () => tab.value === 'review');
+// 用户：5s。跳过：非用户 tab / 搜索框有输入（避免打断筛选）/ 编辑弹窗打开中 / 页面隐藏。
+useSilentPolling(() => loadUsers(true), 5000, () => {
+  return tab.value === 'users' && !userQuery.value.trim() && !editOpen.value;
+});
+// 文章：5s。跳过：非文章 tab / 搜索框有输入 / 页面隐藏。
+useSilentPolling(() => loadArticles(true), 5000, () => {
+  return tab.value === 'articles' && !articleQuery.value.trim();
+});
 
 function fmtDate(s: string): string {
   return s ? new Date(s).toLocaleDateString('zh-CN') : '—';
@@ -1783,6 +2744,195 @@ onMounted(async () => {
   justify-content: flex-end;
   gap: 10px;
   margin-top: 18px;
+}
+
+/* ---- 审核区 ---- */
+.admin input[type='radio'] {
+  /* 全局 input 规则给了 width:100% + padding，单选框会被拉伸占满整行 */
+  width: auto;
+  padding: 0;
+  flex: none;
+}
+
+.row select {
+  flex: 1;
+  min-width: 0;
+  padding: 9px 12px;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.row select:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: #fff;
+}
+
+.row select:disabled {
+  background: #f3f6fa;
+  color: var(--text-3);
+  cursor: not-allowed;
+}
+
+.rv-stage {
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 14px 16px;
+  margin-bottom: 12px;
+  background: #fbfcfe;
+}
+
+.rv-stage-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+
+.rv-stage-head .row.check {
+  margin-bottom: 0;
+}
+
+.rv-order {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  font-size: 13px;
+}
+
+.rv-opt {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 13px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.rv-strict {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin: 4px 0 12px;
+}
+
+.rv-custom {
+  margin-top: 4px;
+}
+
+.rv-new {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+  margin-bottom: 16px;
+}
+
+.rv-new input {
+  flex: 1 1 160px;
+  min-width: 0;
+  padding: 9px 12px;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
+  font-size: 13.5px;
+  outline: none;
+  transition: border-color 0.15s, box-shadow 0.15s, background 0.15s;
+}
+
+.rv-new input:focus {
+  border-color: var(--blue);
+  box-shadow: 0 0 0 3px var(--ring);
+  background: #fff;
+}
+
+.rv-filters {
+  display: flex;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-bottom: 14px;
+}
+
+.rv-filter {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 13px;
+}
+
+.rv-filter select {
+  padding: 7px 10px;
+  background: #fbfcfe;
+  border: 1px solid var(--border-strong);
+  border-radius: 9px;
+  color: var(--text-1);
+  font-size: 13px;
+  outline: none;
+}
+
+.rv-ai {
+  max-width: 260px;
+  font-size: 12.5px;
+  line-height: 1.6;
+}
+
+.rv-err {
+  color: var(--red);
+}
+
+.rv-pager {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.rv-pre {
+  white-space: pre-wrap;
+  margin: 12px 0 0;
+}
+
+.rv-pre.ok {
+  color: var(--green);
+}
+
+.modal.wide {
+  width: min(560px, calc(100vw - 40px));
+}
+
+.pill.pending {
+  color: #b45309;
+  border-color: rgba(217, 119, 6, 0.35);
+  background: #fff7ed;
+  cursor: default;
+}
+
+.pill.approved {
+  color: var(--green);
+  border-color: rgba(21, 128, 61, 0.35);
+  background: var(--green-soft);
+  cursor: default;
+}
+
+.pill.rejected {
+  color: var(--red);
+  border-color: rgba(211, 56, 74, 0.4);
+  background: var(--red-soft);
+  cursor: default;
+}
+
+.pill.cancelled {
+  color: var(--text-3);
+  background: #f6f8fc;
+  cursor: default;
 }
 
 @media (max-width: 720px) {

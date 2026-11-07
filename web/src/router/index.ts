@@ -17,6 +17,7 @@ const router = createRouter({
       meta: { requiresAuth: true },
     },
     { path: '/admin', name: 'admin', component: () => import('../views/AdminView.vue') },
+    { path: '/review', name: 'review', component: () => import('../views/ReviewView.vue') },
     { path: '/space/:id', name: 'space', component: () => import('../views/SpaceView.vue') },
     { path: '/:pathMatch(.*)*', name: 'not-found', component: () => import('../views/NotFoundView.vue') },
   ],
@@ -40,6 +41,8 @@ router.afterEach((to) => {
   setArticleTitle(null);
   // 与 index.html 的首屏底色保持一致：后台浅底、前台黑底（避免切页时边缘露出错误底色）
   document.documentElement.classList.toggle('admin-route', to.name === 'admin');
+  // 审核后台同样是浅色独立界面
+  document.documentElement.classList.toggle('review-route', to.name === 'review');
 });
 
 export default router;

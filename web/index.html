@@ -6,11 +6,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>微光博客</title>
     <!-- 首屏底色：在 JS/样式包加载前就定好页面底色，避免白闪 / 黑闪。
-         /admin 是白蓝后台 → 浅底；其余为星空深色页面 → 纯黑底。 -->
+         /admin 与 /review 都是白蓝后台 → 浅底；其余为星空深色页面 → 纯黑底。 -->
     <script>
       (function () {
-        if (location.pathname === '/admin' || location.pathname.indexOf('/admin/') === 0) {
+        var path = location.pathname;
+        if (path === '/admin' || path.indexOf('/admin/') === 0) {
           document.documentElement.classList.add('admin-route');
+        }
+        if (path === '/review' || path.indexOf('/review/') === 0) {
+          document.documentElement.classList.add('review-route');
         }
       })();
     </script>
@@ -24,6 +28,11 @@
       }
       html.admin-route,
       html.admin-route body {
+        background: #f4f7fc;
+      }
+      /* 审核后台与后台同底色：首屏直接铺浅底，避免加载样式包前露黑 */
+      html.review-route,
+      html.review-route body {
         background: #f4f7fc;
       }
     </style>

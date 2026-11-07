@@ -24,6 +24,17 @@ const DEFAULTS = {
   mail_welcome_body: '',
   mail_test_subject: '',
   mail_test_body: '',
+  // 通知类邮件模板（作者侧：登录提醒 / 审核状态；审核员侧：新任务提醒）
+  mail_notify_login_subject: '',
+  mail_notify_login_body: '',
+  mail_notify_review_pending_subject: '',
+  mail_notify_review_pending_body: '',
+  mail_notify_review_approved_subject: '',
+  mail_notify_review_approved_body: '',
+  mail_notify_review_rejected_subject: '',
+  mail_notify_review_rejected_body: '',
+  mail_notify_reviewer_new_task_subject: '',
+  mail_notify_reviewer_new_task_body: '',
   smtp_host: '',
   smtp_port: '',
   smtp_secure: '',
@@ -52,7 +63,16 @@ const DEFAULTS = {
   // 第三方头像转存：重定向跟随上限（0–12 跳）与总超时（1–300 秒），后台可改
   avatar_redirect_hops: '12',
   avatar_timeout_seconds: '60',
+  // 文章审核流程：enabled 总开关；stages 为阶段序列（'ai' / 'human' 的子集、去重、非空）；
+  // ai / human 段的 on_approve / on_reject 决定该阶段通过或拒绝后的去向：
+  // 'next' 进入下一阶段，'final_approve' / 'final_reject' 直接终审。
+  review_flow: '{"enabled":false,"stages":["ai","human"],"ai":{"on_approve":"next","on_reject":"next"},"human":{"on_approve":"final_approve","on_reject":"final_reject"}}',
+  // AI 初审接口配置（OpenAI 兼容）：base_url 到 /v1 为止；thinking 非 'off' 时按 reasoning_effort 下发
+  review_ai: '{"base_url":"https://api.openai.com/v1","api_key":"","model":"gpt-4o-mini","thinking":"off","temperature":0.2,"timeout_seconds":60,"strictness":"standard","custom_prompt":""}',
 };
+
+/** 内置默认配置（供其他模块做回退参考） */
+export { DEFAULTS };
 
 export function invalidateSettings() {
   cache.clear();
@@ -208,6 +228,66 @@ export const MAIL_TEMPLATES = {
     defaults: {
       subject: '【{site}】邮件发送测试',
       body: '这是一封来自 {site} 的测试邮件。\n\n如果你收到了它，说明当前 SMTP 配置可以正常发信。',
+    },
+  },
+  notify_login: {
+    kind: 'notify_login',
+    label: '登录提醒',
+    desc: '用户登录时发送（需用户在「通知设置」里开启）',
+    subjectKey: 'mail_notify_login_subject',
+    bodyKey: 'mail_notify_login_body',
+    placeholders: ['{name}', '{time}', '{ip}', '{site}'],
+    defaults: {
+      subject: '【{site}】新登录提醒',
+      body: '你好，{name}：\n\n你的账号刚刚在 {time} 从 IP {ip} 登录 {site}。\n\n如非本人操作，请立即修改密码并检查账号安全。',
+    },
+  },
+  notify_review_pending: {
+    kind: 'notify_review_pending',
+    label: '文章待审核通知',
+    desc: '作者提交文章送审后发送',
+    subjectKey: 'mail_notify_review_pending_subject',
+    bodyKey: 'mail_notify_review_pending_body',
+    placeholders: ['{name}', '{title}', '{flow}', '{current_stage}', '{site}'],
+    defaults: {
+      subject: '【{site}】文章已进入审核',
+      body: '你好，{name}：\n\n你的文章《{title}》已提交到 {site}，当前正在审核队列中。\n\n审核结果会另行通知你，请耐心等待。\n\n审核流程：{flow}\n当前步骤：{current_stage}',
+    },
+  },
+  notify_review_approved: {
+    kind: 'notify_review_approved',
+    label: '审核通过通知',
+    desc: '文章终审通过后发送给作者',
+    subjectKey: 'mail_notify_review_approved_subject',
+    bodyKey: 'mail_notify_review_approved_body',
+    placeholders: ['{name}', '{title}', '{url}', '{flow}', '{current_stage}', '{site}'],
+    defaults: {
+      subject: '【{site}】文章审核通过',
+      body: '你好，{name}：\n\n你的文章《{title}》已通过审核并正式发布。\n\n文章链接：{url}\n\n审核流程：{flow}\n当前步骤：{current_stage}',
+    },
+  },
+  notify_review_rejected: {
+    kind: 'notify_review_rejected',
+    label: '审核未通过通知',
+    desc: '文章终审未通过后发送给作者',
+    subjectKey: 'mail_notify_review_rejected_subject',
+    bodyKey: 'mail_notify_review_rejected_body',
+    placeholders: ['{name}', '{title}', '{note}', '{flow}', '{current_stage}', '{site}'],
+    defaults: {
+      subject: '【{site}】文章未通过审核',
+      body: '你好，{name}：\n\n你的文章《{title}》未通过审核。\n\n审核意见：{note}\n\n你可以修改文章后重新提交审核。\n\n审核流程：{flow}\n当前步骤：{current_stage}',
+    },
+  },
+  notify_reviewer_new_task: {
+    kind: 'notify_reviewer_new_task',
+    label: '审核员新任务提醒',
+    desc: '有新的文章进入人工审核阶段时发送给审核员',
+    subjectKey: 'mail_notify_reviewer_new_task_subject',
+    bodyKey: 'mail_notify_reviewer_new_task_body',
+    placeholders: ['{name}', '{title}', '{author}', '{count}', '{flow}', '{current_stage}', '{site}'],
+    defaults: {
+      subject: '【{site}】新的审核任务',
+      body: '你好，{name}：\n\n{author} 的文章《{title}》已进入人工审核阶段。\n\n当前待审核任务共 {count} 条，请尽快处理。\n\n审核流程：{flow}\n当前步骤：{current_stage}',
     },
   },
 };

@@ -14,6 +14,7 @@ import {
   captchaConfig,
 } from '../services/captcha.js';
 import { githubConfig, googleConfig, webOrigin, getSetting } from '../services/settings.js';
+import { notifyUser, getUserNotifyPrefs, setUserNotifyPrefs } from '../services/notify.js';
 import { oauthFetch } from '../services/oauth-fetch.js';
 import { saveAvatarFromUrl, isAllowedAvatarHost } from '../services/avatar.js';
 import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
@@ -34,6 +35,23 @@ async function oauthCallbackUri(provider) {
 }
 
 // oauthFetch 已抽至 services/oauth-fetch.js（OAuth API 与头像下载共用，支持出站代理）
+
+/** 客户端 IP：优先 x-forwarded-for 首段，其次 req.ip（用于登录提醒邮件） */
+function clientIp(req) {
+  const xff = String(req.headers?.['x-forwarded-for'] ?? '').split(',')[0].trim();
+  return String(xff || req.ip || '').slice(0, 64);
+}
+
+/**
+ * 登录提醒邮件：异步发送、不阻塞登录响应。
+ * notifyUser 内部已吞掉所有异常（未订阅 / 无邮箱 / SMTP 未配置 → 静默跳过）。
+ */
+function notifyLogin(user, req) {
+  notifyUser(user.id, 'login', {
+    time: new Date().toLocaleString('zh-CN'),
+    ip: clientIp(req),
+  }).catch(() => {});
+}
 
 /**
  * OAuth 登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱）。
@@ -146,6 +164,7 @@ authRouter.post('/login', loginLimiter, captchaGuard, async (req, res, next) => 
     const ok = await bcrypt.compare(String(password ?? ''), user.password_hash);
     if (!ok) return res.status(401).json({ error: '邮箱或密码错误' });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+    notifyLogin(user, req); // 新登录提醒：异步发出，不阻塞登录
     res.json({ token: signToken(user), user: await publicUser(user) });
   } catch (e) {
     next(e);
@@ -266,6 +285,7 @@ authRouter.post('/login/code', captchaOptionalGuard('login', (req) => req.body?.
       return res.status(403).json({ error: '账号已被禁用' });
     }
     if (!user.email_verified) await pool.query('UPDATE users SET email_verified = 1 WHERE id = ?', [user.id]);
+    notifyLogin(user, req); // 验证码登录提醒：异步发出，不阻塞登录
     res.json({ token: signToken(user), user: await publicUser(user) });
   } catch (e) {
     next(e);
@@ -440,6 +460,7 @@ authRouter.get('/github/callback', async (req, res) => {
     });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
     if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
+    notifyLogin(user, req); // 第三方登录提醒：异步发出，不阻塞跳转
     const origin = await webOrigin();
     res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
   } catch (e) {
@@ -513,6 +534,7 @@ authRouter.get('/google/callback', async (req, res) => {
     });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
     if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
+    notifyLogin(user, req); // 第三方登录提醒：异步发出，不阻塞跳转
     const origin = await webOrigin();
     res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
   } catch (e) {
@@ -523,6 +545,36 @@ authRouter.get('/google/callback', async (req, res) => {
 /* ---------- 当前用户 / 资料 / 头像 ---------- */
 authRouter.get('/me', authRequired, async (req, res) => {
   res.json({ user: await publicUser(req.user) });
+});
+
+/* ---------- 通知订阅设置（轻量开关，无需行为验证） ---------- */
+authRouter.get('/notify-prefs', authRequired, async (req, res, next) => {
+  try {
+    const prefs = await getUserNotifyPrefs(req.user.id);
+    const smtpHost = await getSetting('smtp_host');
+    res.json({
+      prefs,
+      email: req.user.email || '',
+      smtp_configured: !!String(smtpHost ?? '').trim(),
+    });
+  } catch (e) {
+    next(e);
+  }
+});
+
+authRouter.put('/notify-prefs', authRequired, async (req, res, next) => {
+  try {
+    const body = req.body ?? {};
+    // 支持 { prefs: {...} } 与扁平 { login: true, ... } 两种写法
+    const patch =
+      body && typeof body.prefs === 'object' && body.prefs !== null && !Array.isArray(body.prefs)
+        ? body.prefs
+        : body;
+    const prefs = await setUserNotifyPrefs(req.user.id, patch);
+    res.json({ prefs });
+  } catch (e) {
+    next(e);
+  }
 });
 
 // 资料修改风控：正常修改零打扰，10 分钟内第 3 次起要求行为验证（防滥用刷屏）

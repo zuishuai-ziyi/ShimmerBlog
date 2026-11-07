@@ -11,6 +11,11 @@ export function signAdminToken() {
   return jwt.sign({ admin: true }, config.jwtSecret + ':admin', { expiresIn: '12h' });
 }
 
+/** 审核后台令牌（12 小时），与用户 / 管理员令牌分离 */
+export function signReviewerToken(reviewer) {
+  return jwt.sign({ reviewer: reviewer.id }, config.jwtSecret + ':reviewer', { expiresIn: '12h' });
+}
+
 export async function publicUser(u) {
   if (!u) return null;
   return {

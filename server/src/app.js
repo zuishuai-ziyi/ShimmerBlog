@@ -7,6 +7,7 @@ import { healthRouter } from './routes/health.js';
 import { authRouter } from './routes/auth.js';
 import { articlesRouter } from './routes/articles.js';
 import { adminRouter } from './routes/admin.js';
+import { reviewRouter } from './routes/review.js';
 import { spaceRouter } from './routes/space.js';
 import { siteRouter } from './routes/site.js';
 import { uploadsDir } from './uploads.js';
@@ -33,6 +34,7 @@ export function createApp() {
   app.use('/api/auth', authRouter);
   app.use('/api/articles', articlesRouter);
   app.use('/api/admin', adminRouter);
+  app.use('/api/review', reviewRouter);
   app.use('/api/space', spaceRouter);
 
   // /api 未知路径 → JSON 404

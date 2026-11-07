@@ -61,3 +61,31 @@ export async function sendTestEmail(email) {
     text: `${tpl.body}\n\n（后台发送的测试邮件 · ${stamp}）`,
   });
 }
+
+/**
+ * 发送通知类邮件（登录提醒 / 审核状态 / 审核员新任务）。
+ * 模板 kind 见 settings.js 的 MAIL_TEMPLATES（notify_* 系列）。
+ * SMTP 未配置 → 返回 false；发送异常 → 记一行日志后返回 false（永不抛错，绝不阻塞主流程）。
+ */
+export async function sendNotifyEmail(to, kind, vars = {}) {
+  try {
+    const target = String(to ?? '').trim();
+    if (!target) return false;
+    const t = await getTransporter();
+    if (!t) {
+      console.log(`[mailer] SMTP 未配置（开发模式），跳过通知邮件: ${kind} -> ${target}`);
+      return false;
+    }
+    const tpl = await mailTemplate(kind, vars);
+    await t.transporter.sendMail({
+      from: t.from,
+      to: target,
+      subject: tpl.subject,
+      text: tpl.body,
+    });
+    return true;
+  } catch (e) {
+    console.warn(`[mailer] 通知邮件发送失败（不影响主流程）: ${kind} -> ${to} ->`, e?.message || e);
+    return false;
+  }
+}

@@ -39,6 +39,7 @@ import DOMPurify from 'dompurify';
 import http, { errMsg } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { useSilentPolling } from '../stores/polling';
 import { formatDate } from '../utils/format';
 import { setArticleTitle } from '../utils/title';
 import type { Article } from '../types';
@@ -86,6 +87,36 @@ watch(
   },
   { immediate: true }
 );
+
+/** 当前文章 id（未路由到文章时为空串） */
+function currentId(): string {
+  const id = route.params.id;
+  return id ? String(id) : '';
+}
+
+/**
+ * 静默刷新文章详情。
+ * 不碰 loading、不清空正文（避免整页闪烁），只在内容确实变化时才替换。
+ */
+async function refreshSilently(id: string) {
+  if (!id) return;
+  const { data } = await http.get<{ article: Article }>(`/articles/${id}`);
+  const next = data.article;
+  // 路由已切换到别的文章 → 丢弃这次过期响应
+  if (!next || currentId() !== id) return;
+  const cur = article.value;
+  const changed =
+    !cur ||
+    cur.updated_at !== next.updated_at ||
+    cur.status !== next.status ||
+    (cur.review?.state ?? '') !== (next.review?.state ?? '');
+  if (!changed) return;
+  article.value = next;
+  setArticleTitle(next.title);
+}
+
+// 详情轮询：统一 5s 静默刷新一次（页面隐藏时自动跳过；未路由到文章时不轮询）
+useSilentPolling(() => refreshSilently(currentId()), 5000, () => !!currentId());
 </script>
 
 <style scoped>

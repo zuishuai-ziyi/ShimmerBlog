@@ -1,15 +1,16 @@
 <template>
-  <StarField v-if="route.name !== 'admin'" />
-  <TopBar v-if="route.name !== 'admin'" />
+  <StarField v-if="!bareLayout" />
+  <TopBar v-if="!bareLayout" />
   <div class="app-root">
     <div class="app-shell">
       <router-view />
     </div>
-    <SiteFooter v-if="route.name !== 'admin'" />
+    <SiteFooter v-if="!bareLayout" />
   </div>
 </template>
 
 <script setup lang="ts">
+import { computed } from 'vue';
 import { useRoute } from 'vue-router';
 import StarField from './components/StarField.vue';
 import TopBar from './components/TopBar.vue';
@@ -17,6 +18,8 @@ import SiteFooter from './components/SiteFooter.vue';
 
 // 管理后台使用独立界面，不叠加前台顶栏与星空
 const route = useRoute();
+// 审核后台同样是独立界面（与 /admin 一致）：不显示前台顶栏、星空与页脚
+const bareLayout = computed(() => route.name === 'admin' || route.name === 'review');
 </script>
 
 <style>

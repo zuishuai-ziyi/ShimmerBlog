@@ -2,7 +2,7 @@
   <main class="console page">
     <header class="page-head">
       <h1>控制台</h1>
-      <p class="muted">管理你的文章与个人资料</p>
+      <p class="muted">管理你的文章与个人设置</p>
     </header>
 
     <nav class="tabs glass">
@@ -15,13 +15,58 @@
 
     <!-- ================= 我的文章 ================= -->
     <section v-if="tab === 'articles'">
+      <!-- 编辑器 / 详情 / 列表三者互斥：编辑中优先，其次详情，最后列表 -->
       <ArticleEditor
         v-if="editing !== null"
         :key="editing"
         :article-id="editing > 0 ? editing : undefined"
+        :hide-review="editingFromDetail && !!detail && !!detailReview"
         @saved="onSaved"
-        @cancel="editing = null"
-      />
+        @cancel="onEditorCancel"
+      >
+        <!-- 从详情进入编辑：审核状态仍显示在同一位置（标题输入框上方），数据沿用详情不重新请求 -->
+        <template v-if="editingFromDetail && detailReview && detail" #review>
+          <ArticleReviewPanel :review="detailReview" :article="detail" />
+        </template>
+      </ArticleEditor>
+
+      <!-- ---------- 文章详情（在 /console 内展开，不新增路由） ---------- -->
+      <article v-else-if="detailOpen" class="detail glass">
+        <div class="detail-bar">
+          <button class="back-btn" type="button" @click="closeDetail">← 返回列表</button>
+          <button v-if="detail" class="btn" type="button" @click="editFromDetail">编辑</button>
+        </div>
+
+        <p v-if="detailLoading" class="muted detail-state">正在加载…</p>
+        <p v-else-if="detailError" class="error-tip detail-state">{{ detailError }}</p>
+
+        <template v-else-if="detail">
+          <!-- 审核状态：常驻在标题上方（从详情进入编辑时由 ArticleEditor 的 #review 插槽渲染同一份） -->
+          <ArticleReviewPanel v-if="detailReview" :review="detailReview" :article="detail" />
+
+          <h1 class="detail-title">{{ detail.title }}</h1>
+
+          <div class="detail-meta">
+            <img class="avatar small" :src="detail.author_avatar || defaultAvatar" alt="" />
+            <span
+              class="detail-author"
+              :style="detail.author_name_color ? { color: detail.author_name_color } : undefined"
+              >{{ detail.author_name }}</span
+            >
+            <span class="sep">·</span>
+            <time>{{ formatDateTime(detail.published_at || detail.created_at) }}</time>
+            <span v-for="(c, i) in detailChips" :key="`${c.cls}-${i}`" class="chip" :class="c.cls">
+              {{ c.text }}
+            </span>
+          </div>
+
+          <p v-if="detail.summary" class="detail-lead">{{ detail.summary }}</p>
+
+          <hr class="detail-rule" />
+
+          <ArticlePreview :content="detail.content || ''" />
+        </template>
+      </article>
 
       <template v-else>
         <div class="toolbar">
@@ -36,9 +81,32 @@
           <li v-for="a in mine" :key="a.id" class="row">
             <div class="row-main">
               <div class="row-title">
-                <span class="dot" :class="a.status" />
+                <span class="dot" :class="dotClass(a)" />
                 <router-link :to="`/article/${a.id}`">{{ a.title }}</router-link>
-                <span v-if="a.status === 'draft'" class="chip draft">草稿</span>
+                <span v-if="a.status === 'draft' && reviewStateOf(a) === 'none'" class="chip draft">草稿</span>
+                <span
+                  v-else-if="a.status === 'draft' && reviewStateOf(a) === 'pending'"
+                  class="chip pending"
+                >
+                  {{ pendingStatusLabel(a.review) }}
+                </span>
+                <span
+                  v-else-if="a.status === 'draft' && reviewStateOf(a) === 'rejected'"
+                  class="chip rejected"
+                  :title="rejectTip"
+                >
+                  {{ rejectedStatusLabel(a.review) }}
+                </span>
+                <span v-if="a.status === 'published' && reviewStateOf(a) === 'pending'" class="chip pending">
+                  {{ pendingStatusLabel(a.review) }}
+                </span>
+                <span
+                  v-if="a.status === 'published' && reviewStateOf(a) === 'rejected'"
+                  class="chip rejected"
+                  :title="rejectTip"
+                >
+                  {{ rejectedStatusLabel(a.review) }}
+                </span>
                 <span v-if="a.pinned" class="chip pin">置顶</span>
               </div>
               <div class="row-meta">
@@ -47,7 +115,7 @@
               </div>
             </div>
             <div class="row-actions">
-              <button class="link-btn" @click="startEdit(a.id)">编辑</button>
+              <button class="link-btn" @click="openDetail(a.id)">详情</button>
               <button class="link-btn danger" @click="remove(a)">删除</button>
             </div>
           </li>
@@ -55,10 +123,10 @@
       </template>
     </section>
 
-    <!-- ================= 个人资料 ================= -->
+    <!-- ================= 个人设置 ================= -->
     <section v-else class="stack">
       <form class="glass form-card" @submit.prevent="saveProfile">
-        <h2>个人资料</h2>
+        <h2>个人设置</h2>
         <div class="profile-row">
           <img class="avatar big" :src="auth.user?.avatar_url || defaultAvatar" :alt="auth.user?.name" />
           <label class="upload-chip">
@@ -140,6 +208,32 @@
       </form>
       <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
       <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
+      <!-- ======== 通知订阅（邮件） ======== -->
+      <div class="glass form-card">
+        <h2>通知订阅</h2>
+        <p class="field-hint">
+          通知通过邮件发送，收件地址为账号邮箱：<span class="notify-email">{{ notifyEmail || '（未绑定）' }}</span>
+        </p>
+        <p v-if="notifySmtpMissing" class="field-hint notify-warn">
+          站点尚未配置邮件服务，通知暂时无法发送。
+        </p>
+        <label v-for="item in notifyItems" :key="item.key" class="notify-row">
+          <input v-model="notifyPrefs[item.key]" type="checkbox" />
+          <span class="notify-text">
+            <span class="notify-label">{{ item.label }}</span>
+            <span class="notify-desc">{{ item.desc }}</span>
+          </span>
+        </label>
+        <div class="form-actions">
+          <span class="notify-msg">
+            <span v-if="notifyMsg" :class="notifyMsgOk ? 'notice' : 'error-tip'">{{ notifyMsg }}</span>
+          </span>
+          <button class="btn" type="button" :disabled="savingNotify" @click="saveNotifyPrefs">
+            {{ savingNotify ? '保存中…' : '保存通知设置' }}
+          </button>
+        </div>
+      </div>
+
       <!-- 修改/设置密码弹窗：同样放在本 section 内（否则资料页切走后不渲染） -->
       <ChangePasswordDialog v-model:open="changePasswordOpen" @success="onPasswordChanged" />
     </section>
@@ -147,18 +241,22 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue';
+import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { usePollingStore } from '../stores/polling';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import ChangePasswordDialog from '../components/ChangePasswordDialog.vue';
 import { formatDateTime } from '../utils/format';
-import type { ArticleBrief } from '../types';
+import { pendingStatusLabel, rejectedStatusLabel } from '../utils/review';
+import type { Article, ArticleBrief, ArticleReview, ReviewState } from '../types';
 import type { User } from '../stores/auth';
 import bundledAvatar from '../assets/default-avatar.svg';
 import ArticleEditor from '../components/ArticleEditor.vue';
+import ArticlePreview from '../components/ArticlePreview.vue';
+import ArticleReviewPanel from '../components/ArticleReviewPanel.vue';
 
 // 用户默认头像：后台可设置，未设置时用内置图
 const site = useSiteStore();
@@ -166,13 +264,15 @@ const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar
 
 const tabs = [
   { key: 'articles', label: '我的文章' },
-  { key: 'profile', label: '个人资料' },
+  { key: 'profile', label: '个人设置' },
 ] as const;
 const tab = ref<'articles' | 'profile'>('articles');
 
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
+// 轮询状态：后台轮询时顶栏显示加载指示器
+const polling = usePollingStore();
 
 /** 退出登录：清凭证回首页 */
 function doLogout() {
@@ -185,19 +285,153 @@ const mine = ref<ArticleBrief[]>([]);
 const loadingMine = ref(false);
 const editing = ref<number | null>(null);
 
-async function loadMine() {
-  loadingMine.value = true;
+/* ---------- 文章详情（页内展开，不新增路由） ---------- */
+/** 当前详情文章 id；null = 未打开详情 */
+const detailId = ref<number | null>(null);
+const detail = ref<Article | null>(null);
+const detailLoading = ref(false);
+const detailError = ref('');
+/** 详情视图是否打开（与 editing / 列表三者互斥） */
+const detailOpen = computed(() => detailId.value !== null);
+/** 编辑器是由详情页的「编辑」打开的：保存 / 取消后回到详情而不是列表 */
+const editingFromDetail = ref(false);
+
+/** 拉取单篇文章详情（作者视角，含 review.steps 等审核步骤信息） */
+async function loadDetail(id: number | null = detailId.value) {
+  if (id === null) return;
+  detailLoading.value = true;
+  detailError.value = '';
+  try {
+    const { data } = await http.get<{ article: Article }>(`/articles/${id}`);
+    // 请求期间已切到别的文章 / 已返回列表 → 丢弃这次响应
+    if (detailId.value !== id) return;
+    detail.value = data.article;
+  } catch (e) {
+    if (detailId.value !== id) return;
+    detailError.value = errMsg(e);
+  } finally {
+    if (detailId.value === id) detailLoading.value = false;
+  }
+}
+
+/** 列表行「详情」：打开详情视图并拉取数据 */
+async function openDetail(id: number) {
+  detailId.value = id;
+  detail.value = null;
+  detailError.value = '';
+  await loadDetail(id);
+}
+
+/** 详情页「返回列表」 */
+function closeDetail() {
+  detailId.value = null;
+  detail.value = null;
+  detailError.value = '';
+  detailLoading.value = false;
+}
+
+/** 详情页「编辑」：记住来源，保存 / 取消后回到详情 */
+function editFromDetail() {
+  const id = detailId.value;
+  if (id === null) return;
+  editingFromDetail.value = true;
+  startEdit(id);
+}
+
+/** 详情里的审核信息（仅待审 / 被拒时后端返回；其余情况为 null，不渲染审核区块） */
+const detailReview = computed<ArticleReview | null>(() => detail.value?.review ?? null);
+/** 详情头部的状态标签：文案与配色沿用列表的 chip（带环节的当前状态） */
+type DetailChip = { text: string; cls: string };
+
+const detailChips = computed<DetailChip[]>(() => {
+  const a = detail.value;
+  if (!a) return [];
+  const out: DetailChip[] = [];
+  const rs = a.review_state ?? 'none';
+  if (a.status === 'draft') {
+    if (rs === 'pending') out.push({ text: pendingStatusLabel(a.review), cls: 'pending' });
+    else if (rs === 'rejected') out.push({ text: rejectedStatusLabel(a.review), cls: 'rejected' });
+    else out.push({ text: '草稿', cls: 'draft' });
+  } else {
+    out.push({ text: '已发布', cls: 'published' });
+    if (rs === 'pending') out.push({ text: pendingStatusLabel(a.review), cls: 'pending' });
+    else if (rs === 'rejected') out.push({ text: rejectedStatusLabel(a.review), cls: 'rejected' });
+  }
+  if (a.pinned) out.push({ text: '置顶', cls: 'pin' });
+  return out;
+});
+
+/**
+ * 加载我的文章。
+ * silent=true 用于后台轮询：不动 loading 骨架（不闪、不重置列表与滚动位置）。
+ */
+async function loadMine(silent = false) {
+  if (!silent) loadingMine.value = true;
   try {
     const { data } = await http.get<{ items: ArticleBrief[] }>('/articles/mine');
     mine.value = data.items ?? [];
   } catch (e) {
-    console.warn(errMsg(e));
+    // 轮询失败不打扰用户（只记日志，不弹提示）
+    if (!silent) console.warn(errMsg(e));
   } finally {
-    loadingMine.value = false;
+    if (!silent) loadingMine.value = false;
+  }
+}
+
+/* ---------- 审核状态轮询 ---------- */
+/** 轮询间隔：5s */
+const POLL_INTERVAL = 5000;
+let pollTimer: ReturnType<typeof setInterval> | undefined;
+
+/**
+ * 静默轮询审核状态。跳过的场景：
+ *  - 不在「我的文章」列表页（切到其它 tab）
+ *  - 编辑器打开中（正在改稿，由 ArticleEditor 自行轮询，避免打断输入）
+ *  - 页面不可见（切到其它标签页）
+ * 详情视图打开时照常轮询，但只做静默刷新：不碰 detailLoading，也不重置详情状态。
+ */
+async function pollMine() {
+  if (tab.value !== 'articles') return;
+  if (editing.value !== null) return;
+  if (typeof document !== 'undefined' && document.hidden) return;
+  // 包在 polling.track 里：顶栏指示器随轮询请求亮起 / 熄灭
+  await polling.track(async () => {
+    await loadMine(true);
+    // 详情打开时顺带刷新单篇，让审核步骤 / 状态跟着推进
+    await refreshDetailSilently();
+  });
+}
+
+/** 详情对外可见状态的签名：只有这些字段变了才替换 detail（避免正文重复渲染 / 闪烁） */
+function detailSignature(a: Article): string {
+  const r = a.review;
+  // 步骤签名带上 note / error：只改审核意见（或 AI 初审失败标记）时详情也要静默刷新
+  const steps = (r?.steps ?? [])
+    .map((s) => [s.key, s.state, s.note ?? '', s.error ? 1 : 0, s.at ?? ''].join(':'))
+    .join(',');
+  return [a.updated_at, a.status, a.review_state ?? 'none', r?.state ?? '', r?.current_stage ?? '', steps].join('|');
+}
+
+/** 详情视图的静默刷新：失败不打扰，内容未变则不替换 */
+async function refreshDetailSilently() {
+  const id = detailId.value;
+  if (id === null || detailLoading.value) return;
+  try {
+    const { data } = await http.get<{ article: Article }>(`/articles/${id}`);
+    if (detailId.value !== id) return;
+    const next = data.article;
+    if (!next) return;
+    const cur = detail.value;
+    if (cur && detailSignature(cur) === detailSignature(next)) return;
+    detail.value = next;
+    detailError.value = '';
+  } catch {
+    // 轮询失败静默忽略（不弹错误提示）
   }
 }
 
 function startNew() {
+  editingFromDetail.value = false;
   editing.value = 0;
 }
 
@@ -205,9 +439,40 @@ function startEdit(id: number) {
   editing.value = id;
 }
 
+/* ---------- 审核状态 ---------- */
+/** 列表接口只返回 review_state，缺省按 none（未进入审核）处理 */
+function reviewStateOf(a: ArticleBrief): ReviewState {
+  return a.review_state ?? 'none';
+}
+
+/** 状态圆点：已发布恒为绿；草稿在审核中转蓝、被拒转红 */
+function dotClass(a: ArticleBrief): string {
+  if (a.status === 'published') return 'published';
+  const rs = reviewStateOf(a);
+  if (rs === 'pending') return 'pending';
+  if (rs === 'rejected') return 'rejected';
+  return 'draft';
+}
+
+/** 列表不带拒绝理由（只在文章详情里），这里给可执行提示 */
+const rejectTip = '上次提交未通过审核，点「详情」查看拒绝理由，可在详情里点「编辑」重新提交';
+
+/**
+ * 保存成功后回列表（来源是详情页则回到详情并重新拉取详情数据）。
+ * 新建 / 列表进来的编辑保持原有的「回列表」行为。
+ */
 async function onSaved() {
-  await loadMine();
+  const backToDetail = editingFromDetail.value;
   editing.value = null;
+  editingFromDetail.value = false;
+  await loadMine();
+  if (backToDetail && detailId.value !== null) await loadDetail();
+}
+
+/** 编辑器「取消」：来源是详情页则回到详情（detail 状态保留，不重新拉取） */
+function onEditorCancel() {
+  editing.value = null;
+  editingFromDetail.value = false;
 }
 
 async function remove(a: ArticleBrief) {
@@ -220,7 +485,7 @@ async function remove(a: ArticleBrief) {
   }
 }
 
-/* ---------- 个人资料 ---------- */
+/* ---------- 个人设置 ---------- */
 const profileName = ref('');
 const profileBio = ref('');
 const savingProfile = ref(false);
@@ -322,6 +587,74 @@ async function refreshOAuthAvatar(provider?: 'github' | 'google') {
   }
 }
 
+/* ---------- 通知订阅（邮件） ---------- */
+/** 通知开关：登录提醒 + 三种审核结果提醒 */
+type NotifyKey = 'login' | 'review_pending' | 'review_approved' | 'review_rejected';
+
+const notifyItems: Array<{ key: NotifyKey; label: string; desc: string }> = [
+  { key: 'login', label: '登录时', desc: '账号在新设备登录时给我发邮件' },
+  { key: 'review_pending', label: '文章进入审核时', desc: '文章提交后进入审核流程时通知我' },
+  { key: 'review_approved', label: '文章通过审核时', desc: '文章审核通过时通知我' },
+  { key: 'review_rejected', label: '文章未通过审核时', desc: '文章审核未通过时通知我，并带上原因' },
+];
+
+const notifyPrefs = reactive<Record<NotifyKey, boolean>>({
+  login: false,
+  review_pending: false,
+  review_approved: false,
+  review_rejected: false,
+});
+const notifyEmail = ref('');
+const notifySmtpConfigured = ref(true);
+const notifyLoaded = ref(false);
+const savingNotify = ref(false);
+const notifyMsg = ref('');
+const notifyMsgOk = ref(true);
+/** 站点未配 SMTP：提醒用户通知发不出去 */
+const notifySmtpMissing = computed(() => notifyLoaded.value && !notifySmtpConfigured.value);
+
+/** 读取通知订阅；接口失败只静默降级，不影响其它 tab */
+async function loadNotifyPrefs() {
+  try {
+    const { data } = await http.get<{
+      prefs?: Partial<Record<NotifyKey, boolean>>;
+      email?: string;
+      smtp_configured?: boolean;
+    }>('/auth/notify-prefs');
+    const p = data?.prefs ?? {};
+    notifyPrefs.login = !!p.login;
+    notifyPrefs.review_pending = !!p.review_pending;
+    notifyPrefs.review_approved = !!p.review_approved;
+    notifyPrefs.review_rejected = !!p.review_rejected;
+    notifyEmail.value = data?.email || auth.user?.email || '';
+    notifySmtpConfigured.value = data?.smtp_configured !== false;
+    notifyLoaded.value = true;
+  } catch {
+    // 接口未上线 / 网络异常：保持默认值，不打扰其它功能
+    notifyLoaded.value = false;
+  }
+}
+
+async function saveNotifyPrefs() {
+  savingNotify.value = true;
+  notifyMsg.value = '';
+  try {
+    await http.put('/auth/notify-prefs', { prefs: { ...notifyPrefs } });
+    notifyMsgOk.value = true;
+    notifyMsg.value = '已保存';
+  } catch (e) {
+    notifyMsgOk.value = false;
+    notifyMsg.value = errMsg(e);
+  } finally {
+    savingNotify.value = false;
+  }
+}
+
+// 切到「个人设置」时刷新一次订阅状态（避免打开页面时读到旧值）
+watch(tab, (t) => {
+  if (t === 'profile') loadNotifyPrefs();
+});
+
 // ===== 修改/设置密码：弹窗内用邮箱验证码改密（逻辑在 ChangePasswordDialog.vue） =====
 const changePasswordOpen = ref(false);
 /** 未绑定邮箱时无法用验证码改密（按钮已禁用，这里再挡一道） */
@@ -370,6 +703,17 @@ onMounted(async () => {
   if (Number.isInteger(editId) && editId > 0) {
     tab.value = 'articles';
     editing.value = editId;
+  }
+  // 审核状态轮询：列表页每 5s 静默刷新一次（编辑中 / 页面隐藏时自动跳过）
+  pollTimer = setInterval(pollMine, POLL_INTERVAL);
+  // 通知订阅：个人设置里的邮件开关
+  loadNotifyPrefs();
+});
+
+onUnmounted(() => {
+  if (pollTimer) {
+    clearInterval(pollTimer);
+    pollTimer = undefined;
   }
 });
 </script>
@@ -539,6 +883,18 @@ onMounted(async () => {
   background: #f0b429;
 }
 
+/* 审核中：蓝色 */
+.dot.pending {
+  background: #5eb0f0;
+  box-shadow: 0 0 8px #5eb0f0;
+}
+
+/* 审核被拒：红色 */
+.dot.rejected {
+  background: #ff8a8a;
+  box-shadow: 0 0 8px #ff8a8a;
+}
+
 .chip {
   font-size: 11px;
   padding: 2px 8px;
@@ -555,6 +911,24 @@ onMounted(async () => {
 .chip.pin {
   color: var(--accent);
   background: rgba(140, 198, 226, 0.16);
+}
+
+/* 已发布：绿色 */
+.chip.published {
+  color: #63e6be;
+  background: rgba(99, 230, 190, 0.14);
+}
+
+/* 审核中：蓝色 */
+.chip.pending {
+  color: #5eb0f0;
+  background: rgba(94, 176, 240, 0.16);
+}
+
+/* 审核被拒：红色 */
+.chip.rejected {
+  color: #ff8a8a;
+  background: rgba(255, 138, 138, 0.14);
 }
 
 .link-btn {
@@ -586,6 +960,106 @@ onMounted(async () => {
 .avatar.big {
   width: 64px;
   height: 64px;
+}
+
+/* ---------- 文章详情（/console 页内展开，不新增路由） ---------- */
+.detail {
+  max-width: 820px;
+  margin: 0 auto;
+  padding: 22px 34px 44px;
+  min-width: 0;
+}
+
+.detail-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 18px;
+}
+
+.back-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 13px;
+  color: var(--text-dim);
+  background: none;
+  border: none;
+  cursor: pointer;
+  padding: 4px 9px;
+  margin-left: -9px;
+  border-radius: 999px;
+  transition: color 0.2s, background 0.2s;
+}
+
+.back-btn:hover {
+  color: var(--text);
+  background: var(--fill);
+}
+
+/* 「编辑」固定在右侧，与返回按钮分离 */
+.detail-bar .btn {
+  margin-left: auto;
+}
+
+.detail-state {
+  padding: 30px 0;
+  text-align: center;
+}
+
+.detail-title {
+  font-size: 26px;
+  line-height: 1.35;
+  color: #ffffff;
+  margin: 4px 0 12px;
+  overflow-wrap: anywhere;
+}
+
+.detail-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+  font-size: 12.5px;
+  color: var(--text-dim);
+}
+
+.detail-meta .avatar.small {
+  width: 24px;
+  height: 24px;
+}
+
+.detail-author {
+  color: #ffffff;
+}
+
+.detail-meta .sep {
+  opacity: 0.5;
+}
+
+.detail-lead {
+  margin-top: 14px;
+  font-size: 14px;
+  line-height: 1.8;
+  color: var(--text-dim);
+  overflow-wrap: anywhere;
+}
+
+
+.detail-rule {
+  margin: 22px 0 18px;
+  border: none;
+  border-top: 1px solid var(--glass-border);
+}
+
+@media (max-width: 640px) {
+  .detail {
+    padding: 16px 18px 32px;
+  }
+
+  .detail-title {
+    font-size: 21px;
+  }
 }
 
 .empty {
@@ -825,5 +1299,63 @@ onMounted(async () => {
   line-height: 1.6;
   /* 前台未定义 --text-3，直接写实值 */
   color: rgba(255, 255, 255, 0.5);
+}
+
+/* ===== 通知订阅 ===== */
+.notify-email {
+  color: var(--accent);
+}
+
+/* SMTP 未配置：柔和提醒（不是报错） */
+.notify-warn {
+  color: #f0b429;
+}
+
+.notify-row {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 0;
+  border-bottom: 1px dashed var(--border, rgba(255, 255, 255, 0.1));
+  cursor: pointer;
+}
+
+.notify-row:last-of-type {
+  border-bottom: none;
+}
+
+/* 全局 input 规则给了 width:100% + padding，复选框会被拉伸占满整行 */
+.notify-row input[type='checkbox'] {
+  width: 16px;
+  height: 16px;
+  padding: 0;
+  margin: 2px 0 0;
+  flex: none;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.notify-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.notify-label {
+  font-size: 14px;
+  color: #ffffff;
+}
+
+.notify-desc {
+  font-size: 12.5px;
+  line-height: 1.6;
+  color: var(--text-3, rgba(255, 255, 255, 0.5));
+}
+
+/* 行内提示：复用 .notice / .error-tip 配色，去掉块级偏移 */
+.notify-msg .notice,
+.notify-msg .error-tip {
+  margin-top: 0;
 }
 </style>
