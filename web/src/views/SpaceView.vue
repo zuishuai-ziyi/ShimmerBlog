@@ -73,6 +73,7 @@ import { useRoute } from 'vue-router';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { useSilentPolling } from '../stores/polling';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import bundledAvatar from '../assets/default-avatar.svg';
 
@@ -128,6 +129,23 @@ async function load() {
     missing.value = true;
   }
 }
+
+/**
+ * 静默轮询刷新：失败时保留当前内容（不闪空态），也不碰正在编辑的资料表单。
+ * 成功时只替换数据，不清空 user/articles（避免整块闪烁）。
+ */
+async function refreshSilently() {
+  const { data } = await http.get<{ user: SpaceUser; articles: SpaceArticle[]; total: number }>(
+    `/space/${route.params.id}`,
+  );
+  if (!data?.user) return;
+  user.value = data.user;
+  articles.value = data.articles || [];
+  total.value = data.total;
+}
+
+// 空间列表轮询：5s 静默刷新一次（页面隐藏时自动跳过）
+useSilentPolling(refreshSilently, 5000);
 
 function openEdit() {
   draft.name = user.value?.name ?? '';

@@ -7,6 +7,8 @@
       </router-link>
 
       <nav class="nav">
+        <!-- 轮询更新中：半透明白色旋转指示器（首页按钮左侧） -->
+        <span v-if="polling.busy" class="nav-poll" aria-hidden="true"></span>
         <router-link to="/" class="nav-link" exact-active-class="active">首页</router-link>
         <router-link to="/about" class="nav-link" active-class="active">关于</router-link>
 
@@ -25,11 +27,14 @@
 <script setup lang="ts">
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { usePollingStore } from '../stores/polling';
 import { computed } from 'vue';
 import bundledAvatar from '../assets/default-avatar.svg';
 
 const auth = useAuthStore();
 const site = useSiteStore();
+// 轮询状态：有请求在途时顶栏显示加载指示器
+const polling = usePollingStore();
 // 用户默认头像：后台可设置，未设置时用内置图
 const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
 </script>
@@ -89,6 +94,32 @@ const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar
   display: flex;
   align-items: center;
   gap: 6px;
+}
+
+/* 轮询加载指示器：半透明白色圆环（currentColor 跟随导航文字色，深浅主题都可见） */
+.nav-poll {
+  width: 13px;
+  height: 13px;
+  border-radius: 50%;
+  /* 回退：不支持 color-mix 的旧浏览器也能看到圆环轨迹 */
+  border: 2px solid rgba(255, 255, 255, 0.25);
+  border: 2px solid color-mix(in srgb, currentColor 25%, transparent);
+  border-top-color: currentColor;
+  animation: nav-poll-spin 0.7s linear infinite;
+  flex: 0 0 auto;
+  color: var(--text-dim);
+}
+
+@keyframes nav-poll-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-poll {
+    animation-duration: 2.4s;
+  }
 }
 
 .nav-link {

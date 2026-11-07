@@ -32,6 +32,7 @@ import http, { errMsg } from '../api/http';
 import TimelineList from '../components/TimelineList.vue';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { useSilentPolling } from '../stores/polling';
 import type { ArticleBrief } from '../types';
 
 const auth = useAuthStore();
@@ -80,6 +81,41 @@ function loadMore() {
   if (loading.value || !hasMore.value) return;
   fetchPage(page.value + 1);
 }
+
+/** 静默刷新最多覆盖的页数（超出部分保留列表里已加载的旧条目，避免长列表请求风暴） */
+const REFRESH_MAX_PAGES = 20;
+
+/**
+ * 静默轮询：把「已加载的页」重新拉一遍并原地替换列表。
+ * - 不碰 loading（不会出现骨架屏闪烁），不重置页码（用户当前翻到第几页就还是第几页）
+ * - 单页请求失败时保留旧数据，不打断浏览
+ */
+async function refreshLoadedPages() {
+  const loaded = Math.max(1, page.value);
+  const head = Math.min(loaded, REFRESH_MAX_PAGES);
+  const results = await Promise.all(
+    Array.from({ length: head }, (_, i) =>
+      http
+        .get<{ items: ArticleBrief[]; total: number }>('/articles', {
+          params: { page: i + 1, pageSize },
+        })
+        .then((r) => r.data)
+        .catch(() => null),
+    ),
+  );
+  const ok = results.filter((r): r is { items: ArticleBrief[]; total: number } => r !== null);
+  if (!ok.length) return;
+  const fresh = ok.flatMap((r) => r.items || []);
+  // 超出刷新上限的尾部条目沿用旧数据，保证列表长度稳定、不跳动
+  const tail = loaded > head ? articles.value.slice(head * pageSize) : [];
+  articles.value = [...fresh, ...tail];
+  total.value = ok[0].total;
+  error.value = '';
+  moreError.value = '';
+}
+
+// 列表轮询：5s 静默刷新一次（页面隐藏时自动跳过）
+useSilentPolling(refreshLoadedPages, 5000);
 
 onMounted(async () => {
   await fetchPage(1);
