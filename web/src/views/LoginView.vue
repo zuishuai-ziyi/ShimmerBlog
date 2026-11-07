@@ -1,102 +1,108 @@
 <template>
   <div class="login-page">
     <div class="panel">
-      <div v-if="mode !== 'forgot'" ref="tabsEl" class="tabs">
-        <button type="button" :class="{ on: mode === 'login' }" @click="switchMode('login')">登录</button>
-        <button type="button" v-if="site.info.registerOpen" :class="{ on: mode === 'register' }" @click="switchMode('register')">
+      <!-- 「忘记密码」属于登录流程的子页：页签常驻并继续高亮「登录」，
+           否则切到重置页时整条页签消失（面板高度突跳、指示条停在旧位置） -->
+      <div ref="tabsEl" class="tabs">
+        <button type="button" :class="{ on: tabActive === 'login' }" @click="switchMode('login')">登录</button>
+        <button type="button" v-if="site.info.registerOpen" :class="{ on: tabActive === 'register' }" @click="switchMode('register')">
           注册
         </button>
         <!-- 活动页签蓝色指示条：平滑滑动而非消失后出现 -->
         <span class="tabs-slider" :style="sliderStyle" aria-hidden="true"></span>
       </div>
 
-      <form v-if="mode !== 'forgot'" @submit.prevent="submit">
-        <div class="field">
-          <label>邮箱</label>
-          <input v-model.trim="form.email" type="email" placeholder="you@example.com" autocomplete="email" required />
-        </div>
+      <div ref="swapHost" class="swap-host">
+        <Transition name="swap" mode="out-in" v-on="swapHandlers">
+          <form v-if="mode !== 'forgot'" :key="mode" @submit.prevent="submit">
+            <div class="field">
+              <label>邮箱</label>
+              <input v-model.trim="form.email" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
 
-        <div class="field">
-          <label>密码</label>
-          <input
-            v-model="form.password"
-            type="password"
-            :placeholder="mode === 'register' ? '至少 6 位' : '请输入密码'"
-            :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
-            required
-          />
-        </div>
+            <div class="field">
+              <label>密码</label>
+              <input
+                v-model="form.password"
+                type="password"
+                :placeholder="mode === 'register' ? '至少 6 位' : '请输入密码'"
+                :autocomplete="mode === 'register' ? 'new-password' : 'current-password'"
+                required
+              />
+            </div>
 
-        <div v-if="mode === 'register'" class="field">
-          <label>昵称（可选）</label>
-          <input v-model.trim="form.name" type="text" placeholder="留空则用邮箱前缀" maxlength="50" />
-        </div>
+            <div v-if="mode === 'register'" class="field">
+              <label>昵称（可选）</label>
+              <input v-model.trim="form.name" type="text" placeholder="留空则用邮箱前缀" maxlength="50" />
+            </div>
 
-        <div v-if="mode === 'register'" class="field">
-          <label>邮箱验证码</label>
-          <div class="code-row">
-            <input
-              v-model.trim="form.code"
-              type="text"
-              inputmode="numeric"
-              maxlength="6"
-              placeholder="6 位数字"
-              autocomplete="one-time-code"
-              required
-            />
-            <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
-              {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
+            <div v-if="mode === 'register'" class="field">
+              <label>邮箱验证码</label>
+              <div class="code-row">
+                <input
+                  v-model.trim="form.code"
+                  type="text"
+                  inputmode="numeric"
+                  maxlength="6"
+                  placeholder="6 位数字"
+                  autocomplete="one-time-code"
+                  required
+                />
+                <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
+                  {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
+                </button>
+              </div>
+            </div>
+
+            <p v-if="error" class="error-tip">{{ error }}</p>
+            <p v-if="notice" class="notice">{{ notice }}</p>
+
+            <button class="btn submit" type="submit" :disabled="loading">
+              {{ loading ? '处理中…' : mode === 'register' ? '验证并注册' : '登录' }}
             </button>
-          </div>
-        </div>
 
-        <p v-if="error" class="error-tip">{{ error }}</p>
-        <p v-if="notice" class="notice">{{ notice }}</p>
+            <p v-if="mode === 'login'" class="forgot-tip">
+              <button type="button" class="forgot-link" @click="switchMode('forgot')">忘记密码？</button>
+              验证邮箱后即可恢复密码
+            </p>
+          </form>
 
-        <button class="btn submit" type="submit" :disabled="loading">
-          {{ loading ? '处理中…' : mode === 'register' ? '验证并注册' : '登录' }}
-        </button>
+          <!-- 忘记密码：邮箱验证码重置 -->
+          <form v-else key="forgot" @submit.prevent="submitReset">
+            <p class="forgot-title">通过注册邮箱验证重置密码</p>
 
-        <p v-if="mode === 'login'" class="forgot-tip">
-          <button type="button" class="forgot-link" @click="switchMode('forgot')">忘记密码？</button>
-          验证邮箱后即可恢复密码
-        </p>
-      </form>
+            <div class="field">
+              <label>注册邮箱</label>
+              <input v-model.trim="form.email" type="email" placeholder="you@example.com" autocomplete="email" required />
+            </div>
 
-      <!-- 忘记密码：邮箱验证码重置 -->
-      <form v-if="mode === 'forgot'" @submit.prevent="submitReset">
-        <p class="forgot-title">通过注册邮箱验证重置密码</p>
+            <div class="field">
+              <label>邮箱验证码</label>
+              <div class="code-row">
+                <input v-model.trim="form.code" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字" required />
+                <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
+                  {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
+                </button>
+              </div>
+              <p v-if="devCode" class="dev-tip">开发模式验证码：<strong>{{ devCode }}</strong></p>
+            </div>
 
-        <div class="field">
-          <label>注册邮箱</label>
-          <input v-model.trim="form.email" type="email" placeholder="you@example.com" autocomplete="email" required />
-        </div>
+            <div class="field">
+              <label>新密码</label>
+              <input v-model="form.password" type="password" placeholder="至少 6 位" autocomplete="new-password" required />
+            </div>
 
-        <div class="field">
-          <label>邮箱验证码</label>
-          <div class="code-row">
-            <input v-model.trim="form.code" type="text" inputmode="numeric" maxlength="6" placeholder="6 位数字" required />
-            <button type="button" class="btn-ghost" :disabled="counting || sending" @click="sendCode">
-              {{ counting ? `${countdown}s 后重发` : sending ? '发送中…' : '发送验证码' }}
+            <p v-if="error" class="error-tip">{{ error }}</p>
+            <p v-if="notice" class="notice">{{ notice }}</p>
+
+            <button class="btn submit" type="submit" :disabled="loading">
+              {{ loading ? '提交中…' : '重置密码' }}
             </button>
-          </div>
-          <p v-if="devCode" class="dev-tip">开发模式验证码：<strong>{{ devCode }}</strong></p>
-        </div>
 
-        <div class="field">
-          <label>新密码</label>
-          <input v-model="form.password" type="password" placeholder="至少 6 位" autocomplete="new-password" required />
-        </div>
-
-        <p v-if="error" class="error-tip">{{ error }}</p>
-        <p v-if="notice" class="notice">{{ notice }}</p>
-
-        <button class="btn submit" type="submit" :disabled="loading">
-          {{ loading ? '提交中…' : '重置密码' }}
-        </button>
-
-        <p class="forgot-tip"><button type="button" class="forgot-link" @click="switchMode('login')">返回登录</button></p>
-      </form>
+            <p class="forgot-tip"><button type="button" class="forgot-link" @click="switchMode('login')">返回登录</button></p>
+          </form>
+        </Transition>
+      </div>
 
       <div v-if="(site.info.githubEnabled || site.info.googleEnabled) && mode !== 'forgot'" class="third">
         <div class="sep"><span>或使用以下方式继续</span></div>
@@ -130,6 +136,7 @@ import { useRoute, useRouter } from 'vue-router';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import { usePaneSwap } from '../utils/usePaneSwap';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 
 const router = useRouter();
@@ -138,6 +145,10 @@ const auth = useAuthStore();
 const site = useSiteStore();
 
 const mode = ref<'login' | 'register' | 'forgot'>('login');
+// 页签高亮：忘记密码是登录流程的子页，页签仍停在「登录」
+const tabActive = computed(() => (mode.value === 'forgot' ? 'login' : mode.value));
+// 页内三态切换：淡入 + 微位移，外面那层宿主负责补间高度（离场期间容器不能塌陷）
+const { swapHost, swapHandlers } = usePaneSwap();
 const loading = ref(false);
 const sending = ref(false);
 const error = ref('');
