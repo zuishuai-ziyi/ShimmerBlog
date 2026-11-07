@@ -126,7 +126,7 @@
     <!-- ================= 个人设置 ================= -->
     <section v-else class="stack">
       <form class="glass form-card" @submit.prevent="saveProfile">
-        <h2>个人设置</h2>
+        <h2>公开资料</h2>
         <div class="profile-row">
           <img class="avatar big" :src="auth.user?.avatar_url || defaultAvatar" :alt="auth.user?.name" />
           <label class="upload-chip">
@@ -153,6 +153,16 @@
           <label>简介（展示在个人空间）</label>
           <textarea v-model="profileBio" rows="3" maxlength="500" placeholder="介绍一下自己（最多 500 字）" />
         </div>
+        <p v-if="profileError" class="error-tip">{{ profileError }}</p>
+        <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
+        <div class="form-actions">
+          <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
+        </div>
+      </form>
+
+      <!-- ======== 账户设置（邮箱 / 密码 / 第三方账号绑定） ======== -->
+      <section class="glass form-card account-card">
+        <h2>账户设置</h2>
         <div class="field">
           <label>邮箱</label>
           <input :value="auth.user?.email || '（未绑定）'" disabled />
@@ -172,40 +182,37 @@
           <p v-if="!auth.user?.email" class="field-hint">当前账号未绑定邮箱，绑定邮箱后才能修改密码。</p>
         </div>
 
-        <!-- ======== 第三方账号绑定（个人资料卡内小节） ======== -->
-        <section class="bind-section">
-          <h3 class="bind-title">第三方账号绑定</h3>
-          <div v-for="p in bindProviders" :key="p" class="bind-row">
-            <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
-            <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
-            <button
-              v-if="bound(p)"
-              class="btn-ghost danger"
-              type="button"
-              :disabled="!!binding"
-              @click="unbind(p)"
-            >
-              {{ binding === p ? '解绑中…' : '解除绑定' }}
-            </button>
-            <a
-              v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
-              class="btn-ghost bind-link"
-              :href="`/api/auth/bind/${p}`"
-            >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
-            <span v-else class="bind-na">站点未启用</span>
-          </div>
-          <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
-          <p v-if="bindError" class="error-tip">{{ bindError }}</p>
-          <p v-if="bindNotice" class="notice">{{ bindNotice }}</p>
-        </section>
+        <!-- 第三方账号绑定：直接列在卡片内（不再套小节标题与分隔线） -->
+        <div v-for="p in bindProviders" :key="p" class="bind-row">
+          <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
+          <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
+          <button
+            v-if="bound(p)"
+            class="btn-ghost danger"
+            type="button"
+            :disabled="!!binding"
+            @click="unbind(p)"
+          >
+            {{ binding === p ? '解绑中…' : '解除绑定' }}
+          </button>
+          <a
+            v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
+            class="btn-ghost bind-link"
+            :href="`/api/auth/bind/${p}`"
+          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
+          <span v-else class="bind-na">站点未启用</span>
+        </div>
+        <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
 
-        <p v-if="profileError" class="error-tip">{{ profileError }}</p>
-        <p v-if="profileNotice" class="notice">{{ profileNotice }}</p>
+        <!-- 账户卡提示：改密结果与第三方绑定结果共用同一处提示，避免提示显示在用户看不到的卡片里 -->
+        <p v-if="bindError" class="error-tip">{{ bindError }}</p>
+        <p v-if="accountNotice || bindNotice" class="notice">{{ accountNotice || bindNotice }}</p>
+
         <div class="form-actions">
           <button class="btn-ghost logout" type="button" @click="doLogout">退出登录</button>
-          <button class="btn" type="submit" :disabled="savingProfile">{{ savingProfile ? '保存中…' : '保存资料' }}</button>
         </div>
-      </form>
+      </section>
+
       <!-- 验证码弹窗必须放在本 section 内：资料页激活时才挂载，避免放在其它 tab 的分支里导致不渲染 -->
       <CaptchaDialog v-model:open="profileCaptchaOpen" :action="doSaveProfileWithCaptcha" />
       <!-- ======== 通知订阅（邮件） ======== -->
@@ -657,17 +664,24 @@ watch(tab, (t) => {
 
 // ===== 修改/设置密码：弹窗内用邮箱验证码改密（逻辑在 ChangePasswordDialog.vue） =====
 const changePasswordOpen = ref(false);
+/** 账户设置卡（邮箱/密码/第三方绑定）的提示与错误：改密结果展示在本卡内，不混到公开资料卡 */
+const accountNotice = ref('');
 /** 未绑定邮箱时无法用验证码改密（按钮已禁用，这里再挡一道） */
 function openChangePassword() {
   if (!auth.user?.email) return;
   profileError.value = '';
   changePasswordOpen.value = true;
 }
-/** 弹窗内改密成功：同步登录态并在卡片底部提示（文案取后端 message，区分「已修改」/「已设置」） */
+/** 弹窗内改密成功：同步登录态并在账户设置卡底部提示（文案取后端 message，区分「已修改」/「已设置」） */
 function onPasswordChanged(user: User | null, message?: string) {
   if (user) auth.user = user;
+  accountNotice.value = message || '密码已修改';
+  // 改密提示归账户卡：清掉公开资料卡里可能残留的旧提示，以及上一轮绑定/解绑的旧提示
+  // （两者共用同一段提示位，不清会出现「刚解绑 GitHub 却显示密码已修改」）
   profileError.value = '';
-  profileNotice.value = message || '密码已修改';
+  profileNotice.value = '';
+  bindError.value = '';
+  bindNotice.value = '';
 }
 
 // ===== 第 63 轮：第三方账号绑定/解绑 =====
@@ -682,6 +696,8 @@ const bindError = ref('');
 async function unbind(p: BindProvider) {
   if (binding.value) return;
   binding.value = p;
+  // 与改密提示共用同一段提示位：先清掉上一次改密结果，否则本次解绑结果会被旧提示盖住
+  accountNotice.value = '';
   bindNotice.value = '';
   bindError.value = '';
   try {
@@ -1208,43 +1224,17 @@ onUnmounted(() => {
   color: #ffffff;
 }
 
-/* ===== 卡内第三方绑定小节 ===== */
-.bind-section {
-  display: grid;
-  gap: 10px;
-  padding-top: 14px;
-  /* 直接写实值：前台没有定义 --border（仅 AdminView 局部有），var() 永远走 fallback */
-  border-top: 1px dashed rgba(255, 255, 255, 0.1);
-}
-
-/* 小节标题：字号降一档，右侧细线与卡内层级呼应 */
-.bind-title {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  font-size: 13.5px;
-  font-weight: 600;
-  color: var(--accent);
-}
-
-.bind-title::after {
-  content: '';
-  flex: 1;
-  height: 1px;
-  background: rgba(255, 255, 255, 0.14);
-}
-
-/* ===== 第三方绑定行 ===== */
+/* ===== 第三方绑定行（直接排在账户设置卡内，无小节标题） ===== */
 .bind-row {
   display: flex;
   align-items: center;
   gap: 12px;
   padding: 10px 0;
-  /* 同上：--border 前台未定义，直接写实值 */
-  border-bottom: 1px dashed rgba(255, 255, 255, 0.1);
 }
-.bind-row:last-of-type {
-  border-bottom: none;
+/* 分隔线只画在两行之间：bind-row 不再是卡内最后一个 div，不能再用 :last-of-type 判断 */
+.bind-row + .bind-row {
+  /* 同上：--border 前台未定义，直接写实值 */
+  border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
 .bind-name {
   min-width: 72px;
@@ -1324,15 +1314,51 @@ onUnmounted(() => {
   border-bottom: none;
 }
 
-/* 全局 input 规则给了 width:100% + padding，复选框会被拉伸占满整行 */
+/* 全局 input 规则给了 width:100% + padding，复选框会被拉伸占满整行；
+   这里改成自绘玻璃勾选框：appearance:none + 20×20 + 圆角 6px */
 .notify-row input[type='checkbox'] {
-  width: 16px;
-  height: 16px;
+  appearance: none;
+  -webkit-appearance: none;
+  width: 20px;
+  height: 20px;
   padding: 0;
-  margin: 2px 0 0;
+  margin: 0;
   flex: none;
-  accent-color: var(--accent);
+  position: relative;
+  border-radius: 6px;
+  border: 1px solid var(--glass-border);
+  background: var(--field-bg);
   cursor: pointer;
+  transition: border-color 0.18s ease, background-color 0.18s ease, box-shadow 0.18s ease;
+}
+
+/* 悬停：边框提亮 + 淡蓝底 */
+.notify-row input[type='checkbox']:hover {
+  border-color: var(--accent);
+  background: rgba(140, 198, 226, 0.1);
+}
+
+.notify-row input[type='checkbox']:checked {
+  background: var(--accent);
+  border-color: var(--accent);
+}
+
+/* 对勾用深色：--accent 是浅蓝，白勾对比度不足 */
+.notify-row input[type='checkbox']:checked::after {
+  content: '';
+  position: absolute;
+  left: 5.5px;
+  top: 2px;
+  width: 5px;
+  height: 9px;
+  border: solid #08131f;
+  border-width: 0 2px 2px 0;
+  transform: rotate(45deg);
+}
+
+.notify-row input[type='checkbox']:focus-visible {
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(140, 198, 226, 0.28);
 }
 
 .notify-text {
