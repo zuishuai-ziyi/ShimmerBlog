@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
 import { signAdminToken, applyDefaultNameColor, makeLimiter } from '../utils.js';
-import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES } from '../services/settings.js';
+import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES, tianaiCaptchaTypes, gocaptchaCaptchaTypes, TIANAI_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES } from '../services/settings.js';
 import {
   getAIConfig,
   normalizeFlow,
@@ -257,6 +257,11 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
       githubEnabled: gh.enabled,
       googleEnabled: gg.enabled,
       smtpEnabled: !!smtp,
+      // 可选验证码类型的白名单与当前选中值（CSV 原样回传，前端据此渲染多选）
+      captchaTypes: {
+        tianai: { allowed: TIANAI_CAPTCHA_TYPES, value: all.captcha_tianai_types || '' },
+        gocaptcha: { allowed: GOCAPTCHA_CAPTCHA_TYPES, value: all.captcha_gocaptcha_types || '' },
+      },
     });
   } catch (e) {
     next(e);
@@ -379,6 +384,14 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
       const cid = String(body.captcha_id ?? '').trim();
       if (!cid) return res.status(400).json({ error: '验证码实例 ID 不能为空' });
       body.captcha_id = cid;
+    }
+    // 可选验证码类型（CSV，可多选）：按白名单规范化后落库——非法值不报错，直接过滤掉；
+    // 全非法/为空时回落到默认类型（tianai=SLIDER、gocaptcha=CLICK）
+    if (body.captcha_tianai_types !== undefined) {
+      body.captcha_tianai_types = tianaiCaptchaTypes(body.captcha_tianai_types).join(',');
+    }
+    if (body.captcha_gocaptcha_types !== undefined) {
+      body.captcha_gocaptcha_types = gocaptchaCaptchaTypes(body.captcha_gocaptcha_types).join(',');
     }
     // 默认用户名颜色：格式校验（空 = 恢复内置默认）
     if (body.default_name_color !== undefined) {

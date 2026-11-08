@@ -141,8 +141,23 @@ onMounted(() => {
   margin: 4px 0;
 }
 
+/* 关于页自定义 HTML 里的链接：同 www 站正文链接的蓝色系 */
 .block :deep(a) {
-  color: var(--accent);
+  color: var(--link);
+  text-decoration: none;
+  background: linear-gradient(to right, var(--link-underline), var(--link-underline)) right bottom no-repeat;
+  background-size: 0 2px;
+  transition: background-size 0.3s ease, color 0.3s ease;
+}
+
+.block :deep(a:hover) {
+  color: var(--link-hover);
+  background-position: left bottom;
+  background-size: 100% 2px;
+}
+
+.block :deep(a:active) {
+  color: var(--link-active);
 }
 
 .block :deep(img) {

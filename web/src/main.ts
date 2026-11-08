@@ -4,6 +4,7 @@ import App from './App.vue';
 import router from './router';
 import './styles/tokens.css';
 import './styles/motion.css';
+import './styles/links.css';
 import { useSiteStore } from './stores/site';
 
 const app = createApp(App);

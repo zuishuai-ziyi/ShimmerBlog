@@ -1,6 +1,45 @@
 import { pool } from '../db.js';
 import { config } from '../config.js';
 
+/* ---------- 行为验证码类型白名单与默认值（集中定义，供设置读写与下发共用） ---------- */
+/** tianai（天爱 captcha）：/gen?type=XXX 支持的类型集合 */
+export const TIANAI_CAPTCHA_TYPES = ['SLIDER', 'ROTATE', 'CONCAT', 'WORD_IMAGE_CLICK'];
+/** tianai 默认类型：配置为空/全非法时回落 */
+export const TIANAI_CAPTCHA_TYPES_DEFAULT = 'SLIDER';
+/** GoCaptcha：前端库 go-captcha-vue 目前只对接点选（Click），故白名单仅 CLICK */
+export const GOCAPTCHA_CAPTCHA_TYPES = ['CLICK'];
+/** GoCaptcha 默认类型：配置为空/全非法时回落 */
+export const GOCAPTCHA_CAPTCHA_TYPES_DEFAULT = 'CLICK';
+
+/**
+ * 规范化行为验证码类型列表（纯函数，不碰数据库，便于复用与测试）：
+ * 入参可为 CSV 字符串或字符串数组 → 大写、trim、去重、按白名单过滤；
+ * 结果为空（空串/全非法）时回落到 fallback（fallback 必须是白名单内的一个合法值）。
+ */
+export function normalizeCaptchaTypes(value, allowed, fallback) {
+  const raw = Array.isArray(value) ? value.join(',') : String(value ?? '');
+  const seen = new Set();
+  const out = [];
+  for (const part of raw.split(',')) {
+    const t = part.trim().toUpperCase();
+    if (!t || seen.has(t)) continue;
+    if (!allowed.includes(t)) continue; // 白名单外的类型直接丢弃（不报错）
+    seen.add(t);
+    out.push(t);
+  }
+  return out.length ? out : [fallback];
+}
+
+/** tianai 可用类型（数组）：入参 CSV/数组 → 规范化后的合法类型列表 */
+export function tianaiCaptchaTypes(value) {
+  return normalizeCaptchaTypes(value, TIANAI_CAPTCHA_TYPES, TIANAI_CAPTCHA_TYPES_DEFAULT);
+}
+
+/** GoCaptcha 可用类型（数组）：入参 CSV/数组 → 规范化后的合法类型列表 */
+export function gocaptchaCaptchaTypes(value) {
+  return normalizeCaptchaTypes(value, GOCAPTCHA_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES_DEFAULT);
+}
+
 /**
  * 站点配置：存 settings 表（key/value），带内存缓存。
  * 后台修改后立即失效缓存 → 下一次读取生效，无需重启。
@@ -57,6 +96,11 @@ const DEFAULTS = {
   captcha_api: '',
   captcha_verify_api: '',
   captcha_id: 'click-default-ch',
+  // 行为验证码可选类型（CSV，逗号分隔，可多选）：
+  // tianai 支持 SLIDER/ROTATE/CONCAT/WORD_IMAGE_CLICK，gocaptcha 支持 CLICK；
+  // 保存时按白名单规范化（非法值过滤掉，空值回落到默认类型），下发时转成数组。
+  captcha_tianai_types: 'SLIDER',
+  captcha_gocaptcha_types: 'CLICK',
   recaptcha_site_key: '',
   recaptcha_secret_key: '',
   recaptcha_verify_api: '',
@@ -333,6 +377,9 @@ export async function publicSiteInfo() {
     captchaProvider: captchaProviderOf(all),
     captchaApi: all.captcha_api || '',
     captchaId: all.captcha_id || 'click-default-ch',
+    // 可选验证码类型（数组）：前端按 provider 挑一个用，保证至少有一个合法值
+    captchaTianaiTypes: tianaiCaptchaTypes(all.captcha_tianai_types),
+    captchaGocaptchaTypes: gocaptchaCaptchaTypes(all.captcha_gocaptcha_types),
     recaptchaSiteKey: captchaProviderOf(all) === 'recaptcha' ? all.recaptcha_site_key || '' : '',
   };
 }

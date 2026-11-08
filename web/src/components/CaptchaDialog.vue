@@ -1,3 +1,13 @@
+<script lang="ts">
+/**
+ * 模块级计数器（必须放在 <script setup> 之外：那是实例作用域，计数会每个实例从 0 重来）。
+ * 同一页面会同时挂多个 CaptchaDialog（控制台资料页一个 + 修改密码弹窗内一个），
+ * 滑块容器 id 必须跨实例唯一：tianai SDK 用 document.querySelector(bindEl) 绑定容器，
+ * id 写死时总会绑到文档里第一个同 id 容器（常是被隐藏的那个），导致弹窗内一片空白。
+ */
+let tacUid = 0;
+</script>
+
 <script setup lang="ts">
 /**
  * 行为验证弹窗（provider 随 site.info.captchaProvider 切换）：
@@ -39,7 +49,8 @@ const isRecaptcha = computed(() => site.info.captchaProvider === 'recaptcha');
 const isTianai = computed(() => site.info.captchaProvider === 'tianai');
 
 /* ---------- tianai（自托管天爱滑块，本地 /tac/ 静态 SDK 按需加载） ---------- */
-const TAC_BOX_ID = 'tac-captcha-box';
+/** 本实例的滑块容器 id：模块级计数器递增，同页多个实例互不冲突 */
+const tacBoxId = `tac-captcha-box-${++tacUid}`;
 let tacPromise: Promise<any> | null = null;
 function loadTac(): Promise<any> {
   if (tacPromise) return tacPromise;
@@ -69,9 +80,15 @@ function loadTac(): Promise<any> {
 
 const tacEl = ref<HTMLDivElement | null>(null);
 let tacInstance: any = null;
+/**
+ * 本实例本次取题所用的天爱验证码类型：取题→校验期间保持不变
+ * （校验只带 captcha id，不传 type；失败重试会重新 renderTianai() 重建滑块并重新随机 + 换新 URL 取题）
+ */
+let tacType = 'SLIDER';
 
 async function renderTianai() {
   loadError.value = '';
+  await nextTick(); // 若上一步停在 loadError 分支，先让滑块容器重新挂载
   if (!site.info.captchaApi) {
     loadError.value = '验证码服务未配置';
     return;
@@ -80,14 +97,27 @@ async function renderTianai() {
   try {
     const TAC = await loadTac();
     await nextTick(); // loadError 分支切换回组件分支后再挂载
-    if (!tacEl.value) return;
+    const el = tacEl.value;
+    if (!el) {
+      loadError.value = '验证码渲染失败，请点击重试';
+      return;
+    }
     destroyTianai();
     const base = site.info.captchaApi.replace(/\/+$/, '');
+    // 随机取一种天爱类型：只在打开弹窗/重建滑块时选一次，类型写进 /gen 的查询参数交给后端出题
+    const types =
+      Array.isArray(site.info.captchaTianaiTypes) && site.info.captchaTianaiTypes.length
+        ? site.info.captchaTianaiTypes
+        : ['SLIDER'];
+    const picked = types[Math.floor(Math.random() * types.length)] ?? 'SLIDER';
+    tacType = picked;
     tacInstance = new TAC(
       {
-        requestCaptchaDataUrl: `${base}/gen?type=SLIDER`,
+        requestCaptchaDataUrl: `${base}/gen?type=${tacType}`,
         validCaptchaUrl: `${base}/check`,
-        bindEl: `#${TAC_BOX_ID}`,
+        // 直接传 HTMLElement：SDK 内部 Dom 包装对对象走 this.dom = t 分支（不做 querySelector），
+        // 比传 id 更稳——不受页面上其它同 id 容器影响（id 本身也已按实例唯一化）。
+        bindEl: el,
         validSuccess: (_res: any, _c: any, tac: any) => {
           tac.destroyWindow();
           void onTianaiSuccess(_res);
@@ -102,6 +132,13 @@ async function renderTianai() {
       },
       {}
     ).init();
+    await nextTick();
+    // 注入兜底：SDK init() 会把 <div id="tianai-captcha-parent"> 直接 append 到 bindEl
+    // （即本实例容器内，普通文档流），这里为空说明没注到本实例 → 提示重试
+    if (!el.querySelector('#tianai-captcha-parent')) {
+      destroyTianai();
+      loadError.value = '验证码渲染失败，请点击重试';
+    }
   } catch {
     loadError.value = '验证码脚本加载失败，请检查网络或稍后再试';
   } finally {
@@ -130,6 +167,11 @@ async function onTianaiSuccess(res: any) {
   }
 }
 
+/**
+ * 销毁本实例的滑块：SDK 的 destroyWindow 移除的是自己 append 的那个 #tianai-captcha-parent 节点
+ * （DOM 引用由实例持有，不是按 id 全局查找），清空也只限本实例容器——
+ * 不去删别的实例容器、不删全局 #tianai-captcha 层，否则会把另一实例的滑块一起弄坏。
+ */
 function destroyTianai() {
   try {
     tacInstance?.destroyWindow?.();
@@ -239,6 +281,18 @@ const thumbWidth = ref(150);
 const thumbHeight = ref(40);
 const dots = ref<Array<{ key: number; index: number; x: number; y: number }>>([]);
 
+/**
+ * GoCaptcha 组件表：类型 → 组件。
+ * go-captcha-vue 实际还导出 Slide / SlideRegion / Rotate / Button（见 go-captcha-vue/dist/index.d.ts），
+ * 但本站取题接口 /api/v1/public/get-data 返回的是点选专用数据（captcha_key + master/thumb 图），
+ * 且后端白名单 GOCAPTCHA_CAPTCHA_TYPES 仅放行 CLICK —— 其余类型由后端白名单挡掉，
+ * 现有协议也取不到滑块题，故这里只登记真正可用的 CLICK，不臆造组件。
+ */
+const GOCAPTCHA_COMPONENTS: Record<string, any> = { CLICK: Click };
+/** 本次取题随机选中的 GoCaptcha 类型（同一题内不变，换题时重新随机） */
+const gocaptchaType = ref('CLICK');
+const gocaptchaComp = computed(() => GOCAPTCHA_COMPONENTS[gocaptchaType.value] ?? Click);
+
 const config = computed(() => ({
   width: width.value,
   height: height.value,
@@ -258,6 +312,13 @@ async function load() {
   }
   loading.value = true;
   try {
+    // 随机取一种 GoCaptcha 类型：只在取题（打开弹窗/换题）时选一次，同一题内不变
+    const gTypes =
+      Array.isArray(site.info.captchaGocaptchaTypes) && site.info.captchaGocaptchaTypes.length
+        ? site.info.captchaGocaptchaTypes
+        : ['CLICK'];
+    const usable = gTypes.filter((t) => GOCAPTCHA_COMPONENTS[t]);
+    gocaptchaType.value = usable.length ? usable[Math.floor(Math.random() * usable.length)] : 'CLICK';
     const base = site.info.captchaApi.replace(/\/+$/, '');
     const r = await fetch(`${base}/api/v1/public/get-data?id=${encodeURIComponent(site.info.captchaId || 'click-default-ch')}`);
     const j = await r.json();
@@ -392,7 +453,7 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
         <span class="captcha-error">{{ loadError }}</span>
         <button class="captcha-retry" type="button" @click="renderTianai()">重试</button>
       </template>
-      <div v-else :id="TAC_BOX_ID" ref="tacEl" class="tac-box"></div>
+      <div v-else :id="tacBoxId" ref="tacEl" class="tac-box"></div>
       <p v-if="error" class="captcha-result">{{ error }}</p>
       <p v-if="busy" class="captcha-busy">正在验证…</p>
     </div>
@@ -401,7 +462,8 @@ async function onConfirm(list: Array<{ x: number; y: number }>, reset: () => voi
       <button class="captcha-retry" type="button" @click="isRecaptcha ? renderRecaptcha() : load()">重试</button>
     </div>
     <div v-else class="captcha-body">
-      <Click
+      <component
+        :is="gocaptchaComp"
         :config="config"
         :data="{ image, thumb }"
         :events="{ refresh, close, confirm: onConfirm }"
@@ -521,7 +583,11 @@ dialog.captcha-modal--inline .captcha-panel {
   min-height: 78px;
 }
 
-/* tianai 滑块容器：SDK init() 会把验证窗 DOM 注入进来，预留高度避免弹窗跳动 */
+/* tianai 滑块容器：SDK init() 会把验证窗 DOM 注入进来，预留高度避免弹窗跳动。
+   层级：tac.css 里 #tianai-captcha-parent{position:relative;z-index:997}、#tianai-captcha{z-index:999}，
+   但 SDK 是把节点 append 进本容器（tac.css 全文无 position:fixed，不插到 body），
+   所以滑块就在本 dialog 的层叠上下文（z-index:99999）内部，自然盖住弹窗背景，
+   无需覆盖 :global(#tianai-captcha-parent) 的 z-index——此处刻意不动层级。 */
 .tac-box {
   display: flex;
   justify-content: center;

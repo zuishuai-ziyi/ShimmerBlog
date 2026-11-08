@@ -37,6 +37,12 @@
   /* 面板内嵌输入框：比面板亮一档 */
   --field-bg: rgb(180 218 238 / 16%);
 
+  /* 链接色（参考 www 站正文链接：默认淡蓝无下划线，悬停由左侧展开 2px 渐变下划线） */
+  --link: #5ab9ff;
+  --link-hover: #7ec8ff;
+  --link-active: #4a9fef;
+  --link-underline: #1ea6ec;
+
   --radius-lg: 20px;
   --content-w: 880px;
   --timeline-w: 1280px;

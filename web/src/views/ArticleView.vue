@@ -260,14 +260,22 @@ a.author:hover {
 }
 
 .prose :deep(a) {
-  color: var(--accent);
+  color: var(--link);
   text-decoration: none;
-  border-bottom: 1px solid rgba(140, 198, 226, 0.4);
-  transition: color 0.2s, border-color 0.2s;
+  /* 参考 www 站正文链接：默认无下划线，悬停时由左侧展开 2px 渐变下划线 */
+  background: linear-gradient(to right, var(--link-underline), var(--link-underline)) right bottom no-repeat;
+  background-size: 0 2px;
+  transition: background-size 0.3s ease, color 0.3s ease;
 }
 
 .prose :deep(a:hover) {
-  color: var(--accent);
+  color: var(--link-hover);
+  background-position: left bottom;
+  background-size: 100% 2px;
+}
+
+.prose :deep(a:active) {
+  color: var(--link-active);
 }
 
 .prose :deep(ul),

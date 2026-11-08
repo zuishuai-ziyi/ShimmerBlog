@@ -108,11 +108,29 @@
                 <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://go-captcha.xiaoziyi.com" /></label>
                 <label class="row"><span>实例 ID</span><input v-model.trim="captchaForm.captcha_id" placeholder="click-default-ch" /></label>
                 <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:9700" /></label>
+                <div class="type-picker">
+                  <span class="type-picker-label">可用题型（多选 · 出题时随机取一种 · 至少保留一种）</span>
+                  <div class="type-picker-opts">
+                    <label v-for="opt in captchaTypeOptions.gocaptcha" :key="opt" class="perm">
+                      <input type="checkbox" :value="opt" v-model="captchaTypeValue.gocaptcha" :disabled="isLastType(captchaTypeValue.gocaptcha, opt)" />
+                      <span>{{ typeLabel(opt) }}</span>
+                    </label>
+                  </div>
+                </div>
               </template>
               <template v-else-if="captchaForm.captcha_provider === 'tianai'">
                 <label class="row"><span>服务地址</span><input v-model.trim="captchaForm.captcha_api" placeholder="https://tianai-captcha.xiaoziyi.com" /></label>
                 <label class="row"><span>内部校验地址</span><input v-model.trim="captchaForm.captcha_verify_api" placeholder="可选，留空用服务地址；同机可填 http://127.0.0.1:21001" /></label>
                 <p class="hint">前端取题与后端二次验证（/check2）都用服务地址；SDK 静态资源已随站点发布在 /tac/ 下，无需额外配置。</p>
+                <div class="type-picker">
+                  <span class="type-picker-label">可用题型（多选 · 出题时随机取一种 · 至少保留一种）</span>
+                  <div class="type-picker-opts">
+                    <label v-for="opt in captchaTypeOptions.tianai" :key="opt" class="perm">
+                      <input type="checkbox" :value="opt" v-model="captchaTypeValue.tianai" :disabled="isLastType(captchaTypeValue.tianai, opt)" />
+                      <span>{{ typeLabel(opt) }}</span>
+                    </label>
+                  </div>
+                </div>
               </template>
               <template v-else-if="captchaForm.captcha_provider === 'recaptcha'">
                 <label class="row"><span>Site Key</span><input v-model.trim="captchaForm.recaptcha_site_key" placeholder="6Le…" /></label>
@@ -792,6 +810,33 @@ const captchaForm = reactive({
 const captchaEnabledBool = ref(false);
 const captchaOn = ref(false);
 const rcSecretSet = ref(false);
+/* 验证码类型（多选，随机呈现）：白名单与当前勾选值由后端下发（value 为 CSV 字符串） */
+interface CaptchaTypesPayload {
+  tianai?: { allowed?: string[]; value?: string };
+  gocaptcha?: { allowed?: string[]; value?: string };
+}
+const captchaTypeOptions = reactive({ tianai: [] as string[], gocaptcha: [] as string[] });
+const captchaTypeValue = reactive({ tianai: [] as string[], gocaptcha: [] as string[] });
+const captchaTypeLabels: Record<string, string> = {
+  SLIDER: '滑块',
+  ROTATE: '旋转',
+  CONCAT: '拼接',
+  WORD_IMAGE_CLICK: '文字点选',
+  CLICK: '点选',
+};
+function typeLabel(v: string): string {
+  return captchaTypeLabels[v] ?? v;
+}
+/** 解析后端回传的勾选值（CSV 或数组），非法值过滤；空则回落白名单首项，保证至少一种 */
+function parseCaptchaTypes(value: unknown, allowed: string[]): string[] {
+  const raw = Array.isArray(value) ? value.map((v) => String(v)) : String(value ?? '').split(',');
+  const picked = raw.map((v) => v.trim()).filter((v) => v && allowed.includes(v));
+  return picked.length ? picked : allowed.slice(0, 1);
+}
+/** 取消最后一个勾选项时禁用该 checkbox，保证至少保留一种类型 */
+function isLastType(list: string[], value: string): boolean {
+  return list.length <= 1 && list.includes(value);
+}
 // 回调地址以站点配置 web_origin 为准（与后端 redirect_uri 同源：本地 http://localhost:5180，线上域名）；装载配置前先展示当前访问地址
 const callbackBase = ref(window.location.origin);
 const ghAppUrl = 'https://github.com/settings/developers';
@@ -871,6 +916,14 @@ async function bootstrap() {
   rcSecretSet.value = data.settings.recaptcha_secret_key === '__KEEP__';
   captchaEnabledBool.value = data.settings.captcha_enabled === '1';
   captchaOn.value = !!data.captchaEnabled;
+  // 验证码类型白名单与当前勾选（后端回传 CSV 字符串）
+  const ct = (data as { captchaTypes?: CaptchaTypesPayload }).captchaTypes ?? {};
+  const tianaiAllowed = Array.isArray(ct.tianai?.allowed) && ct.tianai.allowed.length ? ct.tianai.allowed : ['SLIDER'];
+  const goAllowed = Array.isArray(ct.gocaptcha?.allowed) && ct.gocaptcha.allowed.length ? ct.gocaptcha.allowed : ['CLICK'];
+  captchaTypeOptions.tianai = [...tianaiAllowed];
+  captchaTypeOptions.gocaptcha = [...goAllowed];
+  captchaTypeValue.tianai = parseCaptchaTypes(ct.tianai?.value, tianaiAllowed);
+  captchaTypeValue.gocaptcha = parseCaptchaTypes(ct.gocaptcha?.value, goAllowed);
   logoUrl.value = data.settings.site_logo_url ?? '';
   defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
   applyReviewSettings((data.settings ?? {}) as Record<string, unknown>);
@@ -935,9 +988,16 @@ async function saveCaptchaSettings() {
       // 密码框留空 = 不修改（后端 __KEEP__ 语义），避免误清已配置的 Secret
       recaptcha_secret_key: captchaForm.recaptcha_secret_key || (rcSecretSet.value ? '__KEEP__' : ''),
       recaptcha_verify_api: captchaForm.recaptcha_verify_api,
+      // 验证码类型（多选，CSV）：后端按白名单规范化，非法值会被过滤
+      captcha_tianai_types: (captchaTypeValue.tianai.length ? captchaTypeValue.tianai : captchaTypeOptions.tianai.slice(0, 1)).join(','),
+      captcha_gocaptcha_types: (captchaTypeValue.gocaptcha.length ? captchaTypeValue.gocaptcha : captchaTypeOptions.gocaptcha.slice(0, 1)).join(','),
     });
     captchaOn.value = !!data.captchaEnabled;
     await refreshSite();
+    // 保存后刷新多选状态：以服务端规范化后的值为准（后端会过滤非法值并回落默认类型）
+    await site.fetch();
+    captchaTypeValue.tianai = parseCaptchaTypes(site.info.captchaTianaiTypes, captchaTypeOptions.tianai);
+    captchaTypeValue.gocaptcha = parseCaptchaTypes(site.info.captchaGocaptchaTypes, captchaTypeOptions.gocaptcha);
     showFlash('✓ 已保存');
   } catch (e) {
     showFlash('保存失败：' + errMsg(e));
@@ -2706,6 +2766,35 @@ onUnmounted(() => {
   font-size: 13px;
   color: var(--text-2);
   cursor: pointer;
+}
+
+/* 验证码类型多选：标题 + 一行选项 + 小字说明 */
+.type-picker {
+  margin: 4px 0 12px;
+}
+.type-picker-label {
+  display: block;
+  font-size: 13px;
+  color: var(--text-3);
+  margin-bottom: 8px;
+}
+.type-picker-opts {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.type-picker-opts .perm {
+  color: var(--text-2);
+}
+.type-picker-opts label {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  cursor: pointer;
+}
+.type-picker-opts input[type='checkbox'] {
+  margin: 0;
 }
 
 .pill {

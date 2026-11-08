@@ -1,0 +1,47 @@
+/* 前台内容区链接样式
+ * 样式参考 www 站正文链接：默认淡蓝（--link）且无下划线，
+ * 悬停时由左侧展开一条 2px 渐变下划线（线色 --link-underline），按下时颜色加深。
+ *
+ * 适用范围：仅内容容器 —— .prose（文章正文、预览组件、编辑器预览）、
+ * .block（关于页自定义 HTML）、.preview-box。
+ * 提示类链接（返回时间轴、编辑、作者名、忘记密码、空间链接、控制台行标题、返回首页）
+ * 由各自组件的局部规则控制，不再被全局规则影响。
+ *
+ * 选择器统一用 :where() 包裹，保持 0 特异性，
+ * 组件内既有的 class 规则（如 .prose :deep(a)、.block :deep(a)）仍可覆盖这里的基础样式。
+ *
+ * 新增内容容器时必须同步往下面的 :where(...) 里加类名。
+ */
+
+/* 内容区链接：默认淡蓝，悬停时由左侧展开渐变下划线 */
+:where(.prose, .block, .preview-box) a:not([download]) {
+  color: var(--link);
+  text-decoration: none;
+  background: linear-gradient(to right, var(--link-underline), var(--link-underline)) right bottom no-repeat;
+  background-size: 0 2px;
+  transition: background-size 0.3s ease, color 0.3s ease;
+}
+
+/* 已访问链接保持默认色，避免浏览器默认的紫色 */
+:where(.prose, .block, .preview-box) a:not([download]):visited {
+  color: var(--link);
+}
+
+/* 悬停：下划线由左向右展开 */
+:where(.prose, .block, .preview-box) a:not([download]):hover {
+  color: var(--link-hover);
+  background-position: left bottom;
+  background-size: 100% 2px;
+}
+
+/* 按下：颜色加深 */
+:where(.prose, .block, .preview-box) a:not([download]):active {
+  color: var(--link-active);
+}
+
+/* 键盘可达性：焦点环用 outline，不占用布局，也不影响下划线方案 */
+:where(.prose, .block, .preview-box) a:not([download]):focus-visible {
+  outline: 2px solid var(--link-hover);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
