@@ -26,10 +26,12 @@ onMounted(async () => {
       } catch {
         /* 未登录时跳转后由路由守卫处理 */
       }
-      setTimeout(() => router.replace('/console'), 1200);
+      setTimeout(() => router.replace({ path: '/console', query: { bind: 'ok' } }), 1200);
     } else {
-      msg.value = `绑定失败：${reason || '未知原因'}`;
-      setTimeout(() => router.replace('/console'), 2500);
+      // reason 现在是后端的稳定错误码（gone/dup/server），这里只做透传；
+      // 具体中文文案在控制台按码映射后展示，此处不直接渲染原始值
+      msg.value = '绑定失败，正在返回个人中心…';
+      setTimeout(() => router.replace({ path: '/console', query: { bind: 'fail', reason } }), 2500);
     }
     return;
   }

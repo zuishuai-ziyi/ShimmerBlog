@@ -90,6 +90,21 @@
             </div>
 
             <div class="card">
+              <h2>外站跳转白名单</h2>
+              <p class="hint">
+                白名单中的域名点击后直接跳转，不再弹出「是否前往外站」确认气泡。每行一个域名（也可用逗号分隔）：<code>example.com</code> 同时匹配 <code>www.example.com</code> 等子域；
+                <code>.example.com</code> / <code>*.example.com</code> 只匹配子域（不含 <code>example.com</code> 本身）；可直接粘贴完整 URL，保存时自动只取主机名。
+              </p>
+              <textarea v-model="siteForm.external_link_whitelist" class="ta mono" rows="6" spellcheck="false" placeholder="example.com&#10;.example.org&#10;https://github.com" />
+              <p class="hint" :class="{ ok: whitelistPreview.length > 0 }">
+                {{ whitelistPreview.length ? `✓ 归一化后 ${whitelistPreview.length} 条：${whitelistPreview.join('、')}` : '当前未设置白名单（所有站外链接都会弹出确认气泡）' }}
+              </p>
+              <div class="ops inline">
+                <button class="primary" :disabled="saving" @click="saveWhitelistSettings">{{ saving ? '保存中…' : '保存白名单' }}</button>
+              </div>
+            </div>
+
+            <div class="card">
               <h2>行为验证码</h2>
               <p class="hint">
                 启用后，登录、注册、发送邮件验证码、发布文章、上传图片、修改资料与后台登录均需先完成验证。
@@ -147,7 +162,7 @@
             </div>
 
             <div class="ops">
-              <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_subtitle', 'about_html'])">
+              <button class="primary" :disabled="saving" @click="saveSettings(['site_title', 'site_subtitle', 'site_description', 'about_subtitle', 'about_html', 'external_link_whitelist'])">
                 {{ saving ? '保存中…' : '保存站点设置' }}
               </button>
               <span v-if="flash" class="flash">{{ flash }}</span>
@@ -505,7 +520,7 @@
               </div>
               <p v-if="!reviewers.length" class="hint">还没有审核员。</p>
               <div class="ops inline">
-                <button class="ghost sm" @click="loadReviewers">刷新列表</button>
+                <button class="ghost sm" @click="loadReviewers()">刷新列表</button>
                 <span v-if="flash && flashScope === 'reviewer'" class="flash">{{ flash }}</span>
               </div>
             </div>
@@ -678,6 +693,7 @@ import { isCaptchaFailure } from '../api/http';
 import { useAdminStore } from '../stores/admin';
 import { useSiteStore } from '../stores/site';
 import { useSilentPolling } from '../stores/polling';
+import { normalizeWhitelistEntries } from '../utils/externalLink';
 import SiteFooter from '../components/SiteFooter.vue';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import defaultAvatar from '../assets/default-avatar.svg';
@@ -791,7 +807,7 @@ function showFlash(msg: string) {
   flashTimer = setTimeout(() => (flash.value = ''), 2600);
 }
 
-const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '', default_name_color: '' });
+const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '', default_name_color: '', external_link_whitelist: '' });
 const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '', avatar_redirect_hops: '12', avatar_timeout_seconds: '60' });
 const githubEnabled = ref(false);
 const googleEnabled = ref(false);
@@ -861,73 +877,159 @@ const smtpEnabled = ref(false);
 const smtpPassSet = ref(false);
 const logoUrl = ref('');
 const defaultAvatarUrl = ref('');
+// Logo / 默认头像的上传（或恢复默认）请求进行中：期间跳过设置轮询，
+// 避免轮询回填把刚上传/刚恢复的预览覆盖成旧图
+const uploadBusy = ref(false);
 // 站点/邮件设置是否已从后端加载成功；未加载前禁止保存，防止空表单覆盖线上配置。
 const settingsReady = ref(false);
 
-async function bootstrap() {
-  const { data } = await adminHttp.get('/admin/settings');
+/* ---- 设置表单基线（未保存修改检测） ---- */
+/**
+ * 设置表单的「已保存基线」：轮询回填会覆盖表单，脏表单必须跳过轮询。
+ * 快照按设置键摊平，覆盖站点 / 邮件 / 第三方登录 / 验证码四组表单——
+ * 一次回填会重灌全部 tab 的表单，只看当前 tab 会漏掉别的 tab 的未保存内容。
+ */
+const settingsBaseline = ref<Record<string, string>>({});
+
+/** 当前各设置表单的取值（摊平为 settingKey → 字符串，便于逐字段比对） */
+function currentSettingValues(): Record<string, string> {
+  const out: Record<string, string> = {};
+  for (const [k, v] of Object.entries(siteForm)) out[k] = String(v ?? '');
+  for (const [k, v] of Object.entries(mailForm)) out[k] = String(v ?? '');
+  // smtp_secure 表单里存 '1'/''，勾选框另用布尔量，两处都要纳入比对
+  out.smtp_secure = smtpSecureBool.value ? '1' : '0';
+  for (const [k, v] of Object.entries(oauthForm)) out[k] = String(v ?? '');
+  for (const [k, v] of Object.entries(captchaForm)) out[k] = String(v ?? '');
+  out.captcha_enabled = captchaEnabledBool.value ? '1' : '0';
+  // 勾选值排序后比对：v-model 数组的顺序随用户点击而变，排序后才是「同一组选择」
+  out.captcha_tianai_types = [...captchaTypeValue.tianai].sort().join(',');
+  out.captcha_gocaptcha_types = [...captchaTypeValue.gocaptcha].sort().join(',');
+  return out;
+}
+
+/** 任一设置表单存在未保存修改 → 轮询不得回填 */
+const settingsDirty = computed(() => {
+  const cur = currentSettingValues();
+  const base = settingsBaseline.value;
+  for (const k of Object.keys(cur)) {
+    if ((cur[k] ?? '') !== (base[k] ?? '')) return true;
+  }
+  return false;
+});
+
+/** 保存成功后把已保存字段写回基线（视为已与服务端一致），使轮询可以继续刷新 */
+function markSettingsSaved(keys: string[]) {
+  const cur = currentSettingValues();
+  const next = { ...settingsBaseline.value };
+  for (const k of keys) if (k in cur) next[k] = cur[k];
+  settingsBaseline.value = next;
+}
+
+/** 后台设置接口返回体（GET /admin/settings） */
+interface AdminSettingsData {
+  settings?: Record<string, string | undefined>;
+  mailTemplates?: TplMeta[];
+  smtpEnabled?: boolean;
+  githubEnabled?: boolean;
+  googleEnabled?: boolean;
+  captchaEnabled?: boolean;
+  captchaTypes?: CaptchaTypesPayload;
+}
+
+/**
+ * 用后端设置回填站点 / 邮件 / 第三方登录 / 验证码表单。
+ * 敏感字段（SMTP 密码、OAuth Secret、reCAPTCHA Secret）沿用后端的 '__KEEP__' 掩码，
+ * 与首次加载完全一致，不会把明文写进表单。
+ */
+function populateSettings(data: AdminSettingsData) {
+  const s: Record<string, string | undefined> = data.settings ?? {};
   Object.assign(siteForm, {
-    site_title: data.settings.site_title ?? '',
-    site_subtitle: data.settings.site_subtitle ?? '',
-    site_description: data.settings.site_description ?? '',
-    about_subtitle: data.settings.about_subtitle ?? '',
-    about_html: data.settings.about_html ?? '',
-    default_name_color: data.settings.default_name_color ?? '',
+    site_title: s.site_title ?? '',
+    site_subtitle: s.site_subtitle ?? '',
+    site_description: s.site_description ?? '',
+    about_subtitle: s.about_subtitle ?? '',
+    about_html: s.about_html ?? '',
+    default_name_color: s.default_name_color ?? '',
+    external_link_whitelist: s.external_link_whitelist ?? '',
   });
   mailTemplates.value = data.mailTemplates ?? [];
   for (const t of mailTemplates.value) {
-    mailForm[t.subjectKey] = data.settings[t.subjectKey] ?? '';
-    mailForm[t.bodyKey] = data.settings[t.bodyKey] ?? '';
+    mailForm[t.subjectKey] = s[t.subjectKey] ?? '';
+    mailForm[t.bodyKey] = s[t.bodyKey] ?? '';
   }
   Object.assign(mailForm, {
-    smtp_host: data.settings.smtp_host ?? '',
-    smtp_port: data.settings.smtp_port ?? '',
-    smtp_from: data.settings.smtp_from ?? '',
-    smtp_user: data.settings.smtp_user ?? '',
-    smtp_pass: data.settings.smtp_pass ?? '',
-    smtp_secure: data.settings.smtp_secure ?? '',
+    smtp_host: s.smtp_host ?? '',
+    smtp_port: s.smtp_port ?? '',
+    smtp_from: s.smtp_from ?? '',
+    smtp_user: s.smtp_user ?? '',
+    smtp_pass: s.smtp_pass ?? '',
+    smtp_secure: s.smtp_secure ?? '',
   });
   smtpSecureBool.value = mailForm.smtp_secure === '1';
   smtpEnabled.value = !!data.smtpEnabled;
-  smtpPassSet.value = data.settings.smtp_pass === '__KEEP__';
+  smtpPassSet.value = s.smtp_pass === '__KEEP__';
   Object.assign(oauthForm, {
-    github_client_id: data.settings.github_client_id ?? '',
-    github_client_secret: data.settings.github_client_secret ?? '',
-    google_client_id: data.settings.google_client_id ?? '',
-    google_client_secret: data.settings.google_client_secret ?? '',
-    oauth_proxy_url: data.settings.oauth_proxy_url ?? '',
-    avatar_redirect_hops: data.settings.avatar_redirect_hops ?? '12',
-    avatar_timeout_seconds: data.settings.avatar_timeout_seconds ?? '60',
+    github_client_id: s.github_client_id ?? '',
+    github_client_secret: s.github_client_secret ?? '',
+    google_client_id: s.google_client_id ?? '',
+    google_client_secret: s.google_client_secret ?? '',
+    oauth_proxy_url: s.oauth_proxy_url ?? '',
+    avatar_redirect_hops: s.avatar_redirect_hops ?? '12',
+    avatar_timeout_seconds: s.avatar_timeout_seconds ?? '60',
   });
   githubEnabled.value = !!data.githubEnabled;
   googleEnabled.value = !!data.googleEnabled;
-  ghSecretSet.value = data.settings.github_client_secret === '__KEEP__';
-  ggSecretSet.value = data.settings.google_client_secret === '__KEEP__';
-  if (data.settings.web_origin) callbackBase.value = data.settings.web_origin;
+  ghSecretSet.value = s.github_client_secret === '__KEEP__';
+  ggSecretSet.value = s.google_client_secret === '__KEEP__';
+  if (s.web_origin) callbackBase.value = s.web_origin;
   Object.assign(captchaForm, {
-    captcha_provider: data.settings.captcha_provider === 'recaptcha' ? 'recaptcha' : data.settings.captcha_provider === 'tianai' ? 'tianai' : 'gocaptcha',
-    captcha_api: data.settings.captcha_api ?? '',
-    captcha_verify_api: data.settings.captcha_verify_api ?? '',
-    captcha_id: data.settings.captcha_id ?? 'click-default-ch',
-    recaptcha_site_key: data.settings.recaptcha_site_key ?? '',
+    captcha_provider: s.captcha_provider === 'recaptcha' ? 'recaptcha' : s.captcha_provider === 'tianai' ? 'tianai' : 'gocaptcha',
+    captcha_api: s.captcha_api ?? '',
+    captcha_verify_api: s.captcha_verify_api ?? '',
+    captcha_id: s.captcha_id ?? 'click-default-ch',
+    recaptcha_site_key: s.recaptcha_site_key ?? '',
     recaptcha_secret_key: '',
-    recaptcha_verify_api: data.settings.recaptcha_verify_api ?? '',
+    recaptcha_verify_api: s.recaptcha_verify_api ?? '',
   });
-  rcSecretSet.value = data.settings.recaptcha_secret_key === '__KEEP__';
-  captchaEnabledBool.value = data.settings.captcha_enabled === '1';
+  rcSecretSet.value = s.recaptcha_secret_key === '__KEEP__';
+  captchaEnabledBool.value = s.captcha_enabled === '1';
   captchaOn.value = !!data.captchaEnabled;
   // 验证码类型白名单与当前勾选（后端回传 CSV 字符串）
-  const ct = (data as { captchaTypes?: CaptchaTypesPayload }).captchaTypes ?? {};
-  const tianaiAllowed = Array.isArray(ct.tianai?.allowed) && ct.tianai.allowed.length ? ct.tianai.allowed : ['SLIDER'];
-  const goAllowed = Array.isArray(ct.gocaptcha?.allowed) && ct.gocaptcha.allowed.length ? ct.gocaptcha.allowed : ['CLICK'];
+  const ct: CaptchaTypesPayload = data.captchaTypes ?? {};
+  const tianaiAllowedRaw = ct.tianai?.allowed;
+  const goAllowedRaw = ct.gocaptcha?.allowed;
+  const tianaiAllowed = Array.isArray(tianaiAllowedRaw) && tianaiAllowedRaw.length ? tianaiAllowedRaw : ['SLIDER'];
+  const goAllowed = Array.isArray(goAllowedRaw) && goAllowedRaw.length ? goAllowedRaw : ['CLICK'];
   captchaTypeOptions.tianai = [...tianaiAllowed];
   captchaTypeOptions.gocaptcha = [...goAllowed];
   captchaTypeValue.tianai = parseCaptchaTypes(ct.tianai?.value, tianaiAllowed);
   captchaTypeValue.gocaptcha = parseCaptchaTypes(ct.gocaptcha?.value, goAllowed);
-  logoUrl.value = data.settings.site_logo_url ?? '';
-  defaultAvatarUrl.value = data.settings.default_avatar_url ?? '';
+  logoUrl.value = s.site_logo_url ?? '';
+  defaultAvatarUrl.value = s.default_avatar_url ?? '';
+  // 回填即刷新基线：此刻表单内容与服务端一致
+  settingsBaseline.value = currentSettingValues();
+  // 回填成功即视为「设置已加载」：首屏 bootstrap 失败时，轮询自愈回填同样能解锁保存
+  settingsReady.value = true;
+}
+
+/** 首次进入后台：拉取设置 + 回填全部表单（含审核设置） */
+async function bootstrap() {
+  const { data } = await adminHttp.get('/admin/settings');
+  populateSettings(data);
   applyReviewSettings((data.settings ?? {}) as Record<string, unknown>);
   settingsReady.value = true;
+}
+
+/** 轮询用：只回灌设置类表单，不动审核设置（审核设置有独立轮询与独立基线） */
+async function reloadSettings() {
+  const { data } = await adminHttp.get('/admin/settings');
+  // 拉取期间用户可能已开始编辑：此时不回填，避免覆盖未保存内容
+  // 未就绪（首屏 bootstrap 失败、基线为空）时允许回填自愈：
+  // 否则永远判脏 → 轮询永远不跑 → 设置再也拉不回来
+  if (settingsReady.value && settingsDirty.value) return;
+  // 请求在途期间可能刚开始上传或保存：此时回填会把旧值盖回去，直接跳过
+  if (uploadBusy.value || saving.value) return;
+  populateSettings(data);
 }
 
 async function saveSettings(keys: string[]): Promise<boolean> {
@@ -951,6 +1053,16 @@ async function saveSettings(keys: string[]): Promise<boolean> {
     smtpEnabled.value = !!data.smtpEnabled;
     githubEnabled.value = !!data.githubEnabled;
     googleEnabled.value = !!data.googleEnabled;
+    // 外站跳转白名单：服务端保存时会归一化（去空行/去重/只取主机名），
+    // 把归一化结果写回表单再更新基线，否则表单里的原始文本与基线不一致，
+    // 下一轮轮询回填会把表单判成「脏」而永久停摆
+    if (keys.includes('external_link_whitelist') && Array.isArray(data?.externalLinkWhitelist)) {
+      siteForm.external_link_whitelist = (data.externalLinkWhitelist as string[]).join('\n');
+    }
+    // 已保存字段写回基线：轮询可以继续刷新（其它未保存字段仍保持脏）
+    markSettingsSaved(keys);
+    // 白名单影响前台「外站跳转确认气泡」：同步前台 store，保存后立即生效
+    if (keys.includes('external_link_whitelist')) await site.fetch();
     if (logoUrl.value && keys.includes('site_title')) await refreshSite();
     showFlash('✓ 已保存');
     return true;
@@ -969,6 +1081,31 @@ async function saveMailSettings() {
 
 async function saveOauthSettings() {
   await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url', 'avatar_redirect_hops', 'avatar_timeout_seconds']);
+}
+
+/* ---- 外站跳转白名单 ---- */
+/** 白名单预览（当前输入归一化后的条目）：提示管理员保存后实际生效的规则 */
+const whitelistPreview = computed(() => normalizeWhitelistEntries(siteForm.external_link_whitelist));
+
+async function saveWhitelistSettings() {
+  if (!settingsReady.value) {
+    showFlash('配置尚未加载完成，请刷新页面后再保存');
+    return;
+  }
+  saving.value = true;
+  try {
+    const { data } = await adminHttp.put('/admin/settings', { external_link_whitelist: siteForm.external_link_whitelist });
+    // 回填服务端归一化后的结果（去空行/去重/URL 只取主机名）
+    const normalized: string[] = Array.isArray(data?.externalLinkWhitelist) ? data.externalLinkWhitelist : [];
+    siteForm.external_link_whitelist = normalized.join('\n');
+    markSettingsSaved(['external_link_whitelist']);
+    await site.fetch(); // 同步前台 store，外链白名单立即生效
+    showFlash(normalized.length ? `✓ 已保存（${normalized.length} 条白名单）` : '✓ 已保存（白名单为空）');
+  } catch (e) {
+    showFlash('保存失败：' + errMsg(e));
+  } finally {
+    saving.value = false;
+  }
 }
 
 async function saveCaptchaSettings() {
@@ -998,6 +1135,18 @@ async function saveCaptchaSettings() {
     await site.fetch();
     captchaTypeValue.tianai = parseCaptchaTypes(site.info.captchaTianaiTypes, captchaTypeOptions.tianai);
     captchaTypeValue.gocaptcha = parseCaptchaTypes(site.info.captchaGocaptchaTypes, captchaTypeOptions.gocaptcha);
+    markSettingsSaved([
+      'captcha_enabled',
+      'captcha_provider',
+      'captcha_api',
+      'captcha_verify_api',
+      'captcha_id',
+      'recaptcha_site_key',
+      'recaptcha_secret_key',
+      'recaptcha_verify_api',
+      'captcha_tianai_types',
+      'captcha_gocaptcha_types',
+    ]);
     showFlash('✓ 已保存');
   } catch (e) {
     showFlash('保存失败：' + errMsg(e));
@@ -1046,6 +1195,7 @@ async function uploadLogo(e: Event) {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
+  uploadBusy.value = true;
   try {
     const { data } = await adminHttp.post('/admin/logo', fd);
     logoUrl.value = data.url;
@@ -1053,11 +1203,14 @@ async function uploadLogo(e: Event) {
     showFlash('✓ Logo 已更新');
   } catch (err) {
     showFlash('上传失败：' + errMsg(err));
+  } finally {
+    uploadBusy.value = false;
   }
   input.value = '';
 }
 
 async function removeLogo() {
+  uploadBusy.value = true;
   try {
     await adminHttp.delete('/admin/logo');
     logoUrl.value = '';
@@ -1065,6 +1218,8 @@ async function removeLogo() {
     showFlash('✓ 已恢复默认 Logo');
   } catch (err) {
     showFlash('操作失败：' + errMsg(err));
+  } finally {
+    uploadBusy.value = false;
   }
 }
 
@@ -1074,6 +1229,7 @@ async function uploadDefaultAvatar(e: Event) {
   if (!file) return;
   const fd = new FormData();
   fd.append('file', file);
+  uploadBusy.value = true;
   try {
     const { data } = await adminHttp.post('/admin/default-avatar', fd);
     defaultAvatarUrl.value = data.url;
@@ -1081,11 +1237,14 @@ async function uploadDefaultAvatar(e: Event) {
     showFlash('✓ 默认头像已更新');
   } catch (err) {
     showFlash('上传失败：' + errMsg(err));
+  } finally {
+    uploadBusy.value = false;
   }
   input.value = '';
 }
 
 async function removeDefaultAvatar() {
+  uploadBusy.value = true;
   try {
     await adminHttp.delete('/admin/default-avatar');
     defaultAvatarUrl.value = '';
@@ -1093,6 +1252,8 @@ async function removeDefaultAvatar() {
     showFlash('✓ 已恢复内置头像');
   } catch (err) {
     showFlash('操作失败：' + errMsg(err));
+  } finally {
+    uploadBusy.value = false;
   }
 }
 
@@ -1628,11 +1789,13 @@ const reviewers = ref<Reviewer[]>([]);
 const reviewerForm = reactive({ username: '', password: '', display_name: '', email: '' });
 const reviewerBusy = ref(false);
 
-async function loadReviewers() {
+/** 审核员列表：silent=true 时失败不打扰页面（轮询用） */
+async function loadReviewers(silent = false) {
   try {
     const { data } = await adminHttp.get('/admin/reviewers');
     reviewers.value = Array.isArray(data.reviewers) ? (data.reviewers as Reviewer[]) : [];
   } catch (e) {
+    if (silent) return;
     flashScope.value = 'reviewer';
     showFlash('审核员列表加载失败：' + revErr(e));
   }
@@ -1921,18 +2084,62 @@ function applyReviewAi(raw: Record<string, unknown>) {
   aiClearKey.value = false;
 }
 
+/* ---- 审核设置基线（未保存修改检测） ---- */
+/**
+ * 审核设置表单的「已保存基线」：审核设置轮询会回填表单，
+ * 脏表单（改了审核流程 / AI 配置但没保存）必须跳过轮询，避免覆盖未保存内容。
+ */
+const reviewBaseline = ref('');
+
+/** 审核流程 + AI 配置的当前取值（JSON 快照） */
+function reviewSignature(): string {
+  return JSON.stringify({
+    flow: {
+      enabled: reviewFlowEnabled.value,
+      aiEnabled: aiEnabled.value,
+      humanEnabled: humanEnabled.value,
+      aiOrder: aiOrder.value,
+      humanOrder: humanOrder.value,
+      aiOnApprove: aiOnApprove.value,
+      aiOnReject: aiOnReject.value,
+      humanOnApprove: humanOnApprove.value,
+      humanOnReject: humanOnReject.value,
+    },
+    ai: {
+      base_url: reviewAiCfg.base_url,
+      api_key: reviewAiCfg.api_key,
+      clear_key: aiClearKey.value,
+      model: reviewAiCfg.model,
+      thinking: reviewAiCfg.thinking,
+      temperature: aiTemperature.value,
+      timeout: aiTimeout.value,
+      strictness: reviewAiCfg.strictness,
+      custom_prompt: reviewAiCfg.custom_prompt,
+    },
+  });
+}
+
+/** 审核设置有未保存修改 → 轮询不回填 */
+const reviewDirty = computed(() => reviewBaseline.value !== '' && reviewSignature() !== reviewBaseline.value);
+
 function applyReviewSettings(settings: Record<string, unknown>) {
   const flow = parseJsonObj(settings.review_flow);
   if (flow) applyReviewFlow(flow);
   const ai = parseJsonObj(settings.review_ai);
   if (ai) applyReviewAi(ai);
+  // 回填即刷新基线：此刻表单内容与服务端一致
+  reviewBaseline.value = reviewSignature();
 }
 
-async function loadReviewSettings() {
+/** 审核设置：silent=true 时失败不打扰页面（轮询用） */
+async function loadReviewSettings(silent = false) {
   try {
     const { data } = await adminHttp.get('/admin/settings');
+    // 拉取期间用户可能已开始编辑：此时不回填，避免覆盖未保存内容
+    if (silent && reviewDirty.value) return;
     applyReviewSettings((data.settings ?? {}) as Record<string, unknown>);
   } catch (e) {
+    if (silent) return;
     showFlash('审核配置重新加载失败：' + revErr(e));
   }
 }
@@ -1975,6 +2182,47 @@ const articlesPolling = useSilentPolling(
   () => canPoll.value && tab.value === 'articles' && !articleQuery.value.trim(),
   () => canPoll.value,
 );
+// 设置类 tab（站点 / 邮件 / 第三方登录）：三个 tab 的表单数据都来自同一份 GET /admin/settings。
+const settingsTabVisible = computed(() => tab.value === 'site' || tab.value === 'mail' || tab.value === 'oauth');
+// 任意后台弹窗打开中：弹窗期间不回灌表单，避免打断用户正在进行的操作。
+const anyModalOpen = computed(
+  () =>
+    pwdOpen.value ||
+    editOpen.value ||
+    aiTestOpen.value ||
+    rwdOpen.value ||
+    emOpen.value ||
+    rejectOpen.value ||
+    gateCaptchaOpen.value,
+);
+// 设置表单：30s。跳过：未登录 / 非设置类 tab / 有弹窗打开 / 图片上传中 / 页面隐藏。
+// 只重灌设置表单（不回灌审核设置，审核设置有独立轮询）；脏表单时整轮跳过，绝不覆盖未保存内容。
+// 未就绪（首屏 bootstrap 失败、基线为空）时允许回填自愈：否则永远判脏 → 轮询永远不跑。
+const settingsPolling = useSilentPolling(
+  () => reloadSettings(),
+  30000,
+  () =>
+    canPoll.value &&
+    settingsTabVisible.value &&
+    !anyModalOpen.value &&
+    !uploadBusy.value &&
+    (!settingsReady.value || !settingsDirty.value),
+  () => canPoll.value,
+);
+// 审核员列表：5s。跳过：未登录 / 非审核 tab / 审核员相关弹窗打开中 / 页面隐藏。
+const reviewersPolling = useSilentPolling(
+  () => loadReviewers(true),
+  5000,
+  () => canPoll.value && tab.value === 'review' && !rwdOpen.value && !emOpen.value,
+  () => canPoll.value,
+);
+// 审核设置：30s。跳过：未登录 / 非审核 tab / 审核设置表单有未保存修改 / 页面隐藏。
+const reviewSettingsPolling = useSilentPolling(
+  () => loadReviewSettings(true),
+  30000,
+  () => canPoll.value && tab.value === 'review' && !reviewDirty.value,
+  () => canPoll.value,
+);
 
 // 登录成功 → 开轮询；登出 / 401 失效 → 立即停掉定时器（未登录时不再打接口）
 watch(canPoll, (ok) => {
@@ -1982,10 +2230,16 @@ watch(canPoll, (ok) => {
     recordsPolling.start();
     usersPolling.start();
     articlesPolling.start();
+    settingsPolling.start();
+    reviewersPolling.start();
+    reviewSettingsPolling.start();
   } else {
     recordsPolling.stop();
     usersPolling.stop();
     articlesPolling.stop();
+    settingsPolling.stop();
+    reviewersPolling.stop();
+    reviewSettingsPolling.stop();
   }
 });
 

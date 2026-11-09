@@ -334,10 +334,21 @@ authRouter.post('/reset-password', resetLimiter, async (req, res, next) => {
 /* ---------- 第三方账号绑定（已登录用户主动绑定 GitHub/Google） ----------
  * 入口 /auth/bind/:provider（authRequired）：签发 bind 模式 state → 302 授权页；
  * 回调复用 /auth/:provider/callback，state.mode==='bind' 时只做绑定，不登录/并档/建号。 */
-function bindRedirect(res, origin, ok, reason) {
+/* 绑定失败原因只允许这三种稳定错误码，前端按码映射中文文案：
+ *   gone=账号不存在或已注销，dup=该第三方账号已绑定其他本站账号，server=其他异常
+ * 原始异常只写服务端日志，绝不进 URL（避免把内部报错信息暴露到前端）。 */
+const BIND_FAIL_CODES = ['gone', 'dup', 'server'];
+
+function bindRedirect(res, origin, ok, code) {
   const q = new URLSearchParams({ bind: ok ? 'ok' : 'fail' });
-  if (reason) q.set('reason', reason);
+  if (!ok && BIND_FAIL_CODES.includes(code)) q.set('reason', code);
   res.redirect(`${origin}/auth/callback?${q.toString()}`);
+}
+
+/** 是否要 JSON 响应：前端带 ?json=1 或 Accept 含 application/json 时返回授权地址而不是 302 */
+function wantsJson(req) {
+  if (String(req.query?.json ?? '') === '1') return true;
+  return String(req.get('accept') || '').includes('application/json');
 }
 
 async function startBind(provider, req, res) {
@@ -361,6 +372,9 @@ async function startBind(provider, req, res) {
     url.searchParams.set('scope', 'openid email profile');
   }
   url.searchParams.set('state', state);
+  // JSON 模式：前端用带 Authorization 头的 XHR 换取授权地址再整页跳转，
+  // 避免整页导航丢失 Bearer 令牌被 authRequired 判成未登录（401）
+  if (wantsJson(req)) return res.json({ url: url.toString() });
   res.redirect(url.toString());
 }
 
@@ -377,12 +391,12 @@ async function finishBind(rec, providerCol, providerId, avatar, res) {
   try {
     const [cur] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [rec.userId]);
     const u = cur[0];
-    if (!u) return bindRedirect(res, origin, false, '账号不存在或已注销');
+    if (!u) return bindRedirect(res, origin, false, 'gone');
     const [dup] = await pool.query(
       `SELECT id FROM users WHERE \`${providerCol}\` = ? AND id <> ? LIMIT 1`,
       [providerId, rec.userId]
     );
-    if (dup.length > 0) return bindRedirect(res, origin, false, '该第三方账号已绑定其他本站账号');
+    if (dup.length > 0) return bindRedirect(res, origin, false, 'dup');
     await pool.query(`UPDATE users SET \`${providerCol}\` = ?, remote_avatar_url = ? WHERE id = ?`, [
       providerId,
       avatar || u.remote_avatar_url || null,
@@ -396,7 +410,9 @@ async function finishBind(rec, providerCol, providerId, avatar, res) {
     }
     bindRedirect(res, origin, true);
   } catch (e) {
-    bindRedirect(res, origin, false, String(e?.message || e));
+    // 异常详情只进服务端日志，前端只拿到 server 错误码
+    console.error('[oauth-bind] 绑定写入失败:', e);
+    bindRedirect(res, origin, false, 'server');
   }
 }
 

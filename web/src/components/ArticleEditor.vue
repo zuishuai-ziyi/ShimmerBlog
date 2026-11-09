@@ -86,6 +86,7 @@ import axios from 'axios';
 import http, { errMsg, isCaptchaFailure } from '../api/http';
 import type { Article, ArticleReview } from '../types';
 import { useSiteStore } from '../stores/site';
+import { usePollingStore } from '../stores/polling';
 import CaptchaDialog from './CaptchaDialog.vue';
 import ReviewSteps from './ReviewSteps.vue';
 
@@ -170,6 +171,8 @@ const previewHtml = computed(() =>
 /** 轮询间隔：5s */
 const POLL_INTERVAL = 5000;
 let pollTimer: ReturnType<typeof setInterval> | undefined;
+/** 轮询状态：顶栏「加载中」指示器的数据源（后台轮询时亮起） */
+const polling = usePollingStore();
 
 /** 打开编辑器时的表单快照：用于判断用户是否有未保存修改 */
 const baseline = ref({ title: '', summary: '', content: '' });
@@ -190,15 +193,18 @@ async function pollReview() {
   if (!props.articleId) return;
   if (typeof document !== 'undefined' && document.hidden) return;
   if (dirty.value) return;
-  try {
-    const { data } = await http.get<{ article: Article }>(`/articles/${props.articleId}`);
-    const article = data.article;
-    if (!article) return;
-    review.value = article.review ?? null;
-    articleStatus.value = article.status;
-  } catch {
-    // 轮询失败静默忽略（不弹错误提示）
-  }
+  // 包在 polling.track 里：顶栏指示器随轮询请求亮起 / 熄灭（与控制台列表轮询一致）
+  await polling.track(async () => {
+    try {
+      const { data } = await http.get<{ article: Article }>(`/articles/${props.articleId}`);
+      const article = data.article;
+      if (!article) return;
+      review.value = article.review ?? null;
+      articleStatus.value = article.status;
+    } catch {
+      // 轮询失败静默忽略（不弹错误提示）
+    }
+  });
 }
 
 /* ---- 行为验证（GoCaptcha）：仅新建文章与上传图片需要（后端只保护这两个接口） ---- */

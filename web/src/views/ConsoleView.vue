@@ -190,16 +190,19 @@
             v-if="bound(p)"
             class="btn-ghost danger"
             type="button"
-            :disabled="!!binding"
+            :disabled="!!binding || !!bindLoading"
             @click="unbind(p)"
           >
             {{ binding === p ? '解绑中…' : '解除绑定' }}
           </button>
-          <a
+          <!-- 绑定必须走 XHR：整页 <a href> 不会带 Authorization 头，后端 authRequired 会判成未登录 -->
+          <button
             v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
             class="btn-ghost bind-link"
-            :href="`/api/auth/bind/${p}`"
-          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</a>
+            type="button"
+            :disabled="!!binding || !!bindLoading"
+            @click="bind(p)"
+          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</button>
           <span v-else class="bind-na">站点未启用</span>
         </div>
         <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
@@ -248,12 +251,13 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, onUnmounted, reactive, ref, watch } from 'vue';
+import { computed, onMounted, reactive, ref, watch } from 'vue';
 import { useRoute, useRouter } from 'vue-router';
+import { isAxiosError } from 'axios';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
-import { usePollingStore } from '../stores/polling';
+import { useSilentPolling } from '../stores/polling';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import ChangePasswordDialog from '../components/ChangePasswordDialog.vue';
 import { formatDateTime } from '../utils/format';
@@ -278,8 +282,8 @@ const tab = ref<'articles' | 'profile'>('articles');
 const auth = useAuthStore();
 const route = useRoute();
 const router = useRouter();
-// 轮询状态：后台轮询时顶栏显示加载指示器
-const polling = usePollingStore();
+/** 轮询总开关：只有已登录才轮询（未登录时接口会 401） */
+const canPoll = computed(() => !!auth.token);
 
 /** 退出登录：清凭证回首页 */
 function doLogout() {
@@ -388,26 +392,25 @@ async function loadMine(silent = false) {
 /* ---------- 审核状态轮询 ---------- */
 /** 轮询间隔：5s */
 const POLL_INTERVAL = 5000;
-let pollTimer: ReturnType<typeof setInterval> | undefined;
 
 /**
  * 静默轮询审核状态。跳过的场景：
  *  - 不在「我的文章」列表页（切到其它 tab）
  *  - 编辑器打开中（正在改稿，由 ArticleEditor 自行轮询，避免打断输入）
- *  - 页面不可见（切到其它标签页）
+ *  - 页面不可见（切到其它标签页，由 useSilentPolling 统一处理）
  * 详情视图打开时照常轮询，但只做静默刷新：不碰 detailLoading，也不重置详情状态。
+ * useSilentPolling 内部已把请求包进 polling.track：顶栏指示器随轮询请求亮起 / 熄灭。
  */
-async function pollMine() {
-  if (tab.value !== 'articles') return;
-  if (editing.value !== null) return;
-  if (typeof document !== 'undefined' && document.hidden) return;
-  // 包在 polling.track 里：顶栏指示器随轮询请求亮起 / 熄灭
-  await polling.track(async () => {
+const minePolling = useSilentPolling(
+  async () => {
     await loadMine(true);
     // 详情打开时顺带刷新单篇，让审核步骤 / 状态跟着推进
     await refreshDetailSilently();
-  });
-}
+  },
+  POLL_INTERVAL,
+  () => tab.value === 'articles' && editing.value === null,
+  () => canPoll.value,
+);
 
 /** 详情对外可见状态的签名：只有这些字段变了才替换 detail（避免正文重复渲染 / 闪烁） */
 function detailSignature(a: Article): string {
@@ -500,13 +503,26 @@ const profileError = ref('');
 const profileNotice = ref('');
 const uploadingAvatar = ref(false);
 
+/** 服务端资料快照：昵称 / 简介最后一次已知的服务端值（与服务端一致：昵称、简介都会 trim） */
+const profileBaseline = ref({ name: '', bio: '' });
+/** 用户改了昵称 / 简介但还没保存：轮询不得回填输入框（避免覆盖正在输入的内容） */
+const profileDirty = computed(
+  () =>
+    profileName.value.trim() !== profileBaseline.value.name.trim() ||
+    profileBio.value.trim() !== profileBaseline.value.bio.trim()
+);
+
 watch(
   () => auth.user,
   (u) => {
-    if (u) {
+    if (!u) return;
+    // 用户正在编辑（未保存）时不回填输入框：轮询只更新展示性字段
+    if (!profileDirty.value) {
       profileName.value = u.name;
       profileBio.value = u.bio || '';
     }
+    // 基线始终跟随服务端最新值：保存成功后 dirty 自然归零
+    profileBaseline.value = { name: (u.name || '').trim(), bio: (u.bio || '').trim() };
   },
   { immediate: true }
 );
@@ -529,6 +545,11 @@ async function doSaveProfile(captcha?: { key: string; value: string }) {
   try {
     const { data } = await http.put('/auth/profile', { name: profileName.value, bio: profileBio.value, captcha });
     if (data.user) auth.user = data.user;
+    // 与服务端对齐（服务端可能对昵称做了规范化）：保存成功后「未保存修改」判定回到干净状态
+    if (data.user) {
+      profileName.value = data.user.name ?? '';
+      profileBio.value = data.user.bio || '';
+    }
     profileNotice.value = '已保存';
   } catch (e) {
     if (isCaptchaRequired(e)) {
@@ -611,6 +632,15 @@ const notifyPrefs = reactive<Record<NotifyKey, boolean>>({
   review_approved: false,
   review_rejected: false,
 });
+/** 服务端通知开关快照：最后一次已知的服务端值 */
+const notifyBaseline = reactive<Record<NotifyKey, boolean>>({
+  login: false,
+  review_pending: false,
+  review_approved: false,
+  review_rejected: false,
+});
+/** 用户改了通知开关但还没保存：轮询不得回填勾选状态 */
+const notifyDirty = computed(() => notifyItems.some((i) => notifyPrefs[i.key] !== notifyBaseline[i.key]));
 const notifyEmail = ref('');
 const notifySmtpConfigured = ref(true);
 const notifyLoaded = ref(false);
@@ -629,10 +659,24 @@ async function loadNotifyPrefs() {
       smtp_configured?: boolean;
     }>('/auth/notify-prefs');
     const p = data?.prefs ?? {};
-    notifyPrefs.login = !!p.login;
-    notifyPrefs.review_pending = !!p.review_pending;
-    notifyPrefs.review_approved = !!p.review_approved;
-    notifyPrefs.review_rejected = !!p.review_rejected;
+    const next = {
+      login: !!p.login,
+      review_pending: !!p.review_pending,
+      review_approved: !!p.review_approved,
+      review_rejected: !!p.review_rejected,
+    };
+    // 用户改了开关但还没保存时不回填：轮询只更新展示性字段（收件邮箱 / SMTP 状态）
+    if (!notifyDirty.value) {
+      notifyPrefs.login = next.login;
+      notifyPrefs.review_pending = next.review_pending;
+      notifyPrefs.review_approved = next.review_approved;
+      notifyPrefs.review_rejected = next.review_rejected;
+    }
+    // 基线始终跟随服务端最新值：保存成功后 dirty 自然归零
+    notifyBaseline.login = next.login;
+    notifyBaseline.review_pending = next.review_pending;
+    notifyBaseline.review_approved = next.review_approved;
+    notifyBaseline.review_rejected = next.review_rejected;
     notifyEmail.value = data?.email || auth.user?.email || '';
     notifySmtpConfigured.value = data?.smtp_configured !== false;
     notifyLoaded.value = true;
@@ -649,6 +693,8 @@ async function saveNotifyPrefs() {
     await http.put('/auth/notify-prefs', { prefs: { ...notifyPrefs } });
     notifyMsgOk.value = true;
     notifyMsg.value = '已保存';
+    // 与服务端对齐：保存成功后「未保存修改」判定回到干净状态
+    for (const item of notifyItems) notifyBaseline[item.key] = notifyPrefs[item.key];
   } catch (e) {
     notifyMsgOk.value = false;
     notifyMsg.value = errMsg(e);
@@ -662,8 +708,57 @@ watch(tab, (t) => {
   if (t === 'profile') loadNotifyPrefs();
 });
 
-// ===== 修改/设置密码：弹窗内用邮箱验证码改密（逻辑在 ChangePasswordDialog.vue） =====
+/* ---------- 个人设置轮询（30s） ---------- */
+/** 个人设置轮询间隔：30s（资料变动不频繁，比文章列表慢） */
+const PROFILE_POLL_INTERVAL = 30000;
+
+/** 改密弹窗是否打开（提前声明：profileBusy 会引用它，避免声明顺序造成 TDZ 隐患） */
 const changePasswordOpen = ref(false);
+
+/** 资料正在提交 / 上传 / 同步：此时暂停轮询，避免回填的旧值盖掉刚保存的新值 */
+const profileBusy = computed(
+  () =>
+    savingProfile.value ||
+    savingNotify.value ||
+    uploadingAvatar.value ||
+    refreshingAvatar.value ||
+    // 改密弹窗打开中：弹窗内依赖 auth.user（邮箱 / 是否已设密码），
+    // 轮询的 fetchMe 会把旧登录态灌回去，导致弹窗状态与提示错乱
+    changePasswordOpen.value
+);
+
+/**
+ * 静默轮询个人设置的数据。数据分两处：
+ *  - auth.user：头像 / 邮箱 / 是否已设密码 / 第三方绑定状态（纯展示，直接刷新）
+ *  - 通知订阅：收件邮箱 / SMTP 是否已配置 / 各提醒开关
+ * 表单里「改了但还没保存」的字段（昵称 / 简介 / 通知开关）由 dirty 守卫保护，
+ * 轮询只回填展示性字段，绝不覆盖用户正在输入的内容。
+ */
+async function pollProfile() {
+  await auth.fetchMe();
+  await loadNotifyPrefs();
+}
+
+// 个人设置：30s 静默刷新。跳过：未登录 / 非个人设置 tab / 正在提交或上传 / 页面隐藏。
+const profilePolling = useSilentPolling(
+  pollProfile,
+  PROFILE_POLL_INTERVAL,
+  () => tab.value === 'profile' && !profileBusy.value,
+  () => canPoll.value,
+);
+
+// 登录成功 → 开轮询；登出 / 401 失效 → 立即停掉定时器（未登录时不再打接口）
+watch(canPoll, (ok) => {
+  if (ok) {
+    minePolling.start();
+    profilePolling.start();
+  } else {
+    minePolling.stop();
+    profilePolling.stop();
+  }
+});
+
+// ===== 修改/设置密码：弹窗内用邮箱验证码改密（逻辑在 ChangePasswordDialog.vue） =====
 /** 账户设置卡（邮箱/密码/第三方绑定）的提示与错误：改密结果展示在本卡内，不混到公开资料卡 */
 const accountNotice = ref('');
 /** 未绑定邮箱时无法用验证码改密（按钮已禁用，这里再挡一道） */
@@ -691,8 +786,68 @@ function bound(p: BindProvider) {
   return p === 'github' ? !!auth.user?.github_id : !!auth.user?.google_id;
 }
 const binding = ref<'' | BindProvider>('');
+/** 绑定流程进行中（正在换取第三方授权地址），用于按钮禁用与防重复点击 */
+const bindLoading = ref<'' | BindProvider>('');
 const bindNotice = ref('');
 const bindError = ref('');
+/** 第三方绑定失败的错误码 → 中文文案（后端只往 URL 里放稳定错误码，异常文本不会外泄） */
+const BIND_FAIL_TEXT: Record<string, string> = {
+  gone: '账号不存在或已注销',
+  dup: '该第三方账号已绑定其他本站账号',
+  server: '绑定失败，请稍后重试',
+};
+/** 未知/缺失错误码的兜底文案（也兼容旧链接里遗留的自由文本 reason） */
+const BIND_FAIL_FALLBACK = '绑定失败，请稍后重试';
+/** 绑定失败提示文案：错误码 → 中文；未知码（含旧链接里的自由文本）走兜底文案 */
+function bindFailText(code: string): string {
+  // 用 hasOwnProperty 取值：reason 来自 URL，可能 'constructor' 这类原型属性名
+  const text = Object.prototype.hasOwnProperty.call(BIND_FAIL_TEXT, code)
+    ? BIND_FAIL_TEXT[code]
+    : '';
+  if (!text) return BIND_FAIL_FALLBACK;
+  // server 的文案本身已含「绑定失败」，其余补前缀说明是绑定环节出的问题
+  return text.startsWith('绑定失败') ? text : `绑定失败：${text}`;
+}
+/** 绑定第三方账号：先用带 Authorization 头的 XHR 换授权地址，再整页跳到第三方授权页 */
+async function bind(p: BindProvider) {
+  if (binding.value || bindLoading.value) return;
+  bindLoading.value = p;
+  // 与解绑提示共用同一段提示位：先清掉旧结果，避免本次结果被旧提示盖住
+  bindNotice.value = '';
+  bindError.value = '';
+  try {
+    const { data } = await http.get<{ url?: string }>(`/auth/bind/${p}?json=1`);
+    if (!data?.url) {
+      bindError.value = '未获取到第三方授权地址，请稍后重试';
+      bindLoading.value = '';
+      return;
+    }
+    // 整页跳转到第三方授权页（页面会卸载，loading 态随之消失）
+    window.location.href = data.url;
+    // 兜底：万一跳转没发生，3 秒后恢复按钮，避免 loading 卡死
+    setTimeout(() => {
+      bindLoading.value = '';
+    }, 3000);
+  } catch (e) {
+    // 网络层失败（断网/被拦截）时 axios 没有 response，errMsg 只会给出英文的 Network Error，这里转成中文提示
+    if (isAxiosError(e) && !e.response) {
+      bindError.value = '网络连接失败，请检查网络后重试';
+      bindLoading.value = '';
+      return;
+    }
+    // 登录态失效（401）：按项目既有约定清掉本地凭证并跳登录页，登录后回到控制台继续绑定
+    if (isAxiosError(e) && e.response?.status === 401) {
+      auth.clear();
+      bindLoading.value = '';
+      router.replace({ name: 'login', query: { redirect: route.fullPath } });
+      return;
+    }
+    const msg = errMsg(e);
+    // 令牌失效时后端返回「未登录 / 登录已过期」，转成可操作的提示
+    bindError.value = /未登录|过期|失效/.test(msg) ? '登录状态已失效，请重新登录后再绑定' : msg;
+    bindLoading.value = '';
+  }
+}
 async function unbind(p: BindProvider) {
   if (binding.value) return;
   binding.value = p;
@@ -720,16 +875,25 @@ onMounted(async () => {
     tab.value = 'articles';
     editing.value = editId;
   }
-  // 审核状态轮询：列表页每 5s 静默刷新一次（编辑中 / 页面隐藏时自动跳过）
-  pollTimer = setInterval(pollMine, POLL_INTERVAL);
+  // 轮询由 useSilentPolling 统一管理（挂载即启动，非目标 tab / 页面隐藏时自动跳过）
   // 通知订阅：个人设置里的邮件开关
   loadNotifyPrefs();
-});
-
-onUnmounted(() => {
-  if (pollTimer) {
-    clearInterval(pollTimer);
-    pollTimer = undefined;
+  // 第三方绑定回调结果（AuthCallbackView 带 ?bind=ok|fail&reason=… 跳回）：在账户设置卡里提示
+  const bindResult = route.query.bind;
+  if (bindResult === 'ok' || bindResult === 'fail') {
+    if (bindResult === 'ok') {
+      // 绑定成功后刷新用户信息，否则「已绑定 / 未绑定」徽标仍显示旧状态
+      await auth.fetchMe();
+      bindNotice.value = '绑定成功';
+    } else {
+      // reason 只可能是后端的稳定错误码；未知码（含旧链接里的自由文本）走兜底文案
+      const code = typeof route.query.reason === 'string' ? route.query.reason : '';
+      bindError.value = bindFailText(code);
+    }
+    // 提示在「个人设置」卡里，切到该标签页才能直接看到结果
+    tab.value = 'profile';
+    // 清掉 query，避免刷新页面时重复提示
+    router.replace({ path: '/console' });
   }
 });
 </script>
@@ -1274,7 +1438,7 @@ onUnmounted(() => {
   opacity: 0.55;
   cursor: not-allowed;
 }
-.bind-row a.bind-link {
+.bind-row .bind-link {
   text-decoration: none;
   margin-left: auto;
 }
