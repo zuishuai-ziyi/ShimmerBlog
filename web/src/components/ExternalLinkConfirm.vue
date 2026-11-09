@@ -47,9 +47,14 @@ const VIEWPORT_PAD = 12;
 const ANCHOR_GAP = 12;
 /* 首帧还没量到真实高度时的兜底估算 */
 const POP_FALLBACK_HEIGHT = 168;
+/* 箭头（气泡轮廓上的小三角）：根部半宽与高度，两腰 45° */
+const ARROW_HALF = 6;
+const ARROW_HEIGHT = 6;
 
 const uid = useId();
 const titleId = `ext-link-title-${uid}`;
+/* 气泡阴影用的 SVG 滤镜 id（每个实例唯一） */
+const shadowFilterId = `ext-link-shadow-${uid}`;
 
 const popEl = ref<HTMLElement | null>(null);
 const goBtn = ref<HTMLButtonElement | null>(null);
@@ -62,12 +67,79 @@ const placement = ref<'top' | 'bottom'>('bottom');
 const arrowLeft = ref(0);
 /* 气泡实测尺寸，用于视口内夹紧与上下翻转判断 */
 const measured = reactive({ width: 0, height: 0 });
+/* 气泡圆角半径：从计算样式读取，与 --radius-lg 保持一致 */
+const radius = ref(0);
 
 const popStyle = computed(() => ({
   left: `${pos.left}px`,
   top: `${pos.top}px`,
-  '--arrow-left': `${arrowLeft.value}px`,
 }));
+
+/** 箭头在气泡轮廓上的横坐标：始终指向锚点中心，
+ *  但要夹在圆角之外（圆角半径 + 箭头半宽），否则箭头会压在圆弧上、接缝明显 */
+const arrowX = computed(() => {
+  const w = measured.width || POP_MAX_WIDTH;
+  const min = radius.value + ARROW_HALF;
+  const max = Math.max(min, w - min);
+  return Math.min(Math.max(arrowLeft.value, min), max);
+});
+
+/* 气泡外形路径（圆角矩形 + 箭头） */
+const shapePath = computed(() => {
+  const w = measured.width;
+  const h = measured.height;
+  if (!w || !h) return '';
+  // placement=bottom：气泡在锚点下方 → 箭头长在气泡顶部朝上；反之长在底部朝下
+  return buildOutline(w, h, radius.value, arrowX.value, placement.value === 'top' ? 'bottom' : 'top');
+});
+
+/**
+ * 生成气泡外形路径：圆角矩形 + 一个小三角（箭头）。
+ * 三角与边框共用同一条闭合路径：
+ *  - 填充一次成形，不会因半透明叠加而出现深色接缝；
+ *  - 描边自然绕过箭头、与边框连成一体，箭头根部不会出现第四条横线。
+ * edge='top' 箭头长在顶部（朝上），edge='bottom' 长在底部（朝下）。
+ */
+function buildOutline(w: number, h: number, r: number, cx: number, edge: 'top' | 'bottom'): string {
+  const half = ARROW_HALF;
+  const tail = ARROW_HEIGHT;
+  const f = (n: number) => Math.round(n * 100) / 100;
+  const p = (x: number, y: number) => `${f(x)} ${f(y)}`;
+  const rr = f(r);
+  if (edge === 'top') {
+    // 顺时针：顶边（带箭头凸起）→ 右边 → 底边 → 左边
+    return [
+      `M ${p(cx - half, 0)}`,
+      `L ${p(cx, -tail)}`,
+      `L ${p(cx + half, 0)}`,
+      `L ${p(w - r, 0)}`,
+      `A ${rr} ${rr} 0 0 1 ${p(w, r)}`,
+      `L ${p(w, h - r)}`,
+      `A ${rr} ${rr} 0 0 1 ${p(w - r, h)}`,
+      `L ${p(r, h)}`,
+      `A ${rr} ${rr} 0 0 1 ${p(0, h - r)}`,
+      `L ${p(0, r)}`,
+      `A ${rr} ${rr} 0 0 1 ${p(r, 0)}`,
+      'Z',
+    ].join(' ');
+  }
+  // 顺时针：顶边 → 右边 → 底边（带箭头凸起）→ 左边
+  return [
+    `M ${p(r, 0)}`,
+    `L ${p(w - r, 0)}`,
+    `A ${rr} ${rr} 0 0 1 ${p(w, r)}`,
+    `L ${p(w, h - r)}`,
+    `A ${rr} ${rr} 0 0 1 ${p(w - r, h)}`,
+    `L ${p(cx + half, h)}`,
+    `L ${p(cx, h + tail)}`,
+    `L ${p(cx - half, h)}`,
+    `L ${p(r, h)}`,
+    `A ${rr} ${rr} 0 0 1 ${p(0, h - r)}`,
+    `L ${p(0, r)}`,
+    `A ${rr} ${rr} 0 0 1 ${p(r, 0)}`,
+    'Z',
+  ].join(' ');
+}
 
 /** 量一次气泡实际尺寸（宽度由 CSS 固定，高度随 URL 行数变化）
  *  用 offsetWidth/offsetHeight 而不是 getBoundingClientRect()：入场动画带 scale(.98)，
@@ -77,6 +149,9 @@ function measure() {
   if (!el) return;
   if (el.offsetWidth > 0) measured.width = el.offsetWidth;
   if (el.offsetHeight > 0) measured.height = el.offsetHeight;
+  // 圆角半径与 SVG 轮廓共用同一个值，避免描边和气泡边框对不上
+  const r = parseFloat(getComputedStyle(el).borderTopLeftRadius);
+  if (!Number.isNaN(r)) radius.value = r;
 }
 
 /** 依据锚点与视口计算气泡落点与箭头位置 */
@@ -123,8 +198,8 @@ function reposition() {
   pos.left = left;
   pos.top = top;
   placement.value = place;
-  // 箭头始终指向锚点中心，并夹在气泡内避免溢出圆角
-  arrowLeft.value = Math.min(Math.max(anchorCx - left, 16), Math.max(16, w - 16));
+  // 箭头始终指向锚点中心；越界由轮廓路径按圆角与箭头半宽夹紧（见 arrowX）
+  arrowLeft.value = anchorCx - left;
 }
 
 /* ---------- 关闭行为 ---------- */
@@ -219,6 +294,7 @@ onBeforeUnmount(removeListeners);
 <template>
   <Teleport to="body">
     <Transition name="ext-pop">
+      <!-- :data-placement 仅作 e2e / 调试锚点（气泡落点 top/bottom），无 CSS/JS 消费，勿删 -->
       <div
         v-if="open"
         ref="popEl"
@@ -230,6 +306,30 @@ onBeforeUnmount(removeListeners);
         :aria-labelledby="titleId"
         tabindex="-1"
       >
+        <!-- 气泡外形（圆角矩形 + 箭头）由一条 SVG 路径绘制：
+             填充一次成形，箭头与本体之间不会出现半透明叠加的深色接缝；
+             描边绕过箭头自然连成一体，箭头根部也不会多出一条横线 -->
+        <svg
+          class="ext-link-pop__shape"
+          :width="measured.width"
+          :height="measured.height"
+          aria-hidden="true"
+          focusable="false"
+        >
+          <defs>
+            <filter
+              :id="shadowFilterId"
+              x="-50%"
+              y="-60%"
+              width="200%"
+              height="220%"
+              color-interpolation-filters="sRGB"
+            >
+              <feDropShadow dx="0" dy="16" stdDeviation="20" flood-color="#000000" flood-opacity="0.6" />
+            </filter>
+          </defs>
+          <path class="ext-link-pop__outline" :d="shapePath" :filter="`url(#${shadowFilterId})`" />
+        </svg>
         <p :id="titleId" class="ext-link-title">是否前往以下站点？</p>
         <p class="ext-link-url" :title="href">{{ href }}</p>
         <p class="ext-link-hint">该站点不属于本站，请仔细甄别后前往</p>
@@ -243,46 +343,38 @@ onBeforeUnmount(removeListeners);
 </template>
 
 <style scoped>
-/* 暗色玻璃气泡：1px 边框 + 克制阴影，无渐变、无霓虹 */
+/* 暗色玻璃气泡：1px 边框 + 克制阴影，无渐变、无霓虹
+   外形（填充 + 边框 + 箭头）交给下面的 SVG 路径，这里只负责排版 */
 .ext-link-pop {
   position: fixed;
   z-index: 1000;
+  /* 气泡 SVG 外形（.ext-link-pop__shape 用 z-index:-1 压在文字下方）依赖父级建立层叠上下文，
+     isolation 显式锁定它，防止后人删掉 z-index 后填充 + 描边整体消失 */
+  isolation: isolate;
   box-sizing: border-box;
   width: min(268px, calc(100vw - 24px));
-  padding: 12px 14px;
+  padding: 13px 15px;
   border-radius: var(--radius-lg);
-  background: var(--glass-bg-strong);
-  border: 1px solid var(--glass-border);
   backdrop-filter: var(--glass-blur);
   -webkit-backdrop-filter: var(--glass-blur);
-  box-shadow: 0 16px 40px rgb(0 0 0 / 38%);
   color: var(--text);
   outline: none;
 }
 
-/* 小箭头：旋转 45° 的方块，露出的两条边即为箭头轮廓 */
-.ext-link-pop::before {
-  content: '';
+/* 气泡外形层：贴着气泡盒子，箭头与阴影可以溢出盒子 */
+.ext-link-pop__shape {
   position: absolute;
-  left: var(--arrow-left, 50%);
-  width: 8px;
-  height: 8px;
-  margin-left: -4.5px;
-  background: var(--glass-bg-strong);
-  border-left: 1px solid var(--glass-border);
-  border-top: 1px solid var(--glass-border);
+  left: 0;
+  top: 0;
+  z-index: -1;
+  overflow: visible;
 }
 
-/* 气泡在锚点下方：箭头朝上 */
-.ext-link-pop[data-placement='bottom']::before {
-  top: -4.5px;
-  transform: rotate(45deg);
-}
-
-/* 气泡在锚点上方：箭头朝下 */
-.ext-link-pop[data-placement='top']::before {
-  bottom: -4.5px;
-  transform: rotate(225deg);
+/* 外形轮廓：填充与边框一次画完，箭头根部不描边 → 不会出现第四条边 */
+.ext-link-pop__outline {
+  fill: var(--glass-bg-strong);
+  stroke: var(--glass-border);
+  stroke-width: 1;
 }
 
 /* 标题：比正文略大、字重 600 */

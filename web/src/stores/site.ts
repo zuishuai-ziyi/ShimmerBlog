@@ -1,6 +1,7 @@
 import { defineStore } from 'pinia';
 import http from '../api/http';
 import { setSiteName } from '../utils/title';
+import { normalizeWhitelistEntries } from '../utils/externalLink';
 
 /**
  * 天爱验证码类型白名单（与后端 server/src/services/settings.js 的 TIANAI_CAPTCHA_TYPES 保持一致；
@@ -51,6 +52,8 @@ export interface SiteInfo {
   captchaTianaiTypes: string[];
   /** GoCaptcha 类型白名单（多选，前端随机取一种呈现） */
   captchaGocaptchaTypes: string[];
+  /** 外站跳转白名单（域名数组）：命中的域名点击跳转时不弹「是否前往外站」确认气泡 */
+  externalLinkWhitelist: string[];
 }
 
 export const useSiteStore = defineStore('site', {
@@ -73,6 +76,7 @@ export const useSiteStore = defineStore('site', {
       aboutSubtitle: '一个会发光的角落',
       captchaTianaiTypes: DEFAULT_TIANAI_TYPES.slice(),
       captchaGocaptchaTypes: DEFAULT_GOCAPTCHA_TYPES.slice(),
+      externalLinkWhitelist: [] as string[],
     } as SiteInfo,
     loaded: false,
   }),
@@ -86,6 +90,8 @@ export const useSiteStore = defineStore('site', {
           ...info,
           captchaTianaiTypes: pickTypes(info.captchaTianaiTypes, DEFAULT_TIANAI_TYPES, TIANAI_TYPE_ALLOWLIST),
           captchaGocaptchaTypes: pickTypes(info.captchaGocaptchaTypes, DEFAULT_GOCAPTCHA_TYPES, GOCAPTCHA_TYPE_ALLOWLIST),
+          // 外站跳转白名单：归一化（去空/去非法/去重），非法条目丢弃 → 视为未命中 → 照常提示
+          externalLinkWhitelist: normalizeWhitelistEntries(info.externalLinkWhitelist),
         };
         setSiteName(this.info.title);
       } catch {

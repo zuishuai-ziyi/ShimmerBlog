@@ -40,6 +40,64 @@ export function gocaptchaCaptchaTypes(value) {
   return normalizeCaptchaTypes(value, GOCAPTCHA_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES_DEFAULT);
 }
 
+/* ---------- 外站跳转白名单（域名） ---------- */
+/**
+ * 规范化单个白名单条目（纯函数，不碰数据库）：
+ * - 支持直接粘贴完整 URL：剥掉 scheme / userinfo / 路径 / 查询串 / 锚点 / 端口，只取 hostname；
+ * - 支持 `.example.com` 与 `*.example.com` 两种「仅子域」写法，统一归一为 `.example.com`；
+ * - 大小写统一转小写；空行与非法条目丢弃（不报错）。
+ * 返回：普通条目 `example.com`；仅子域条目 `.example.com`；非法/空 → 空串。
+ */
+function normalizeExternalLinkEntry(input) {
+  let s = String(input ?? '').trim();
+  if (!s) return '';
+  // 「仅子域」标记：*.example.com / .example.com → 统一为 .example.com
+  let subOnly = false;
+  if (s.startsWith('*.')) {
+    subOnly = true;
+    s = s.slice(2);
+  } else if (s.startsWith('.')) {
+    subOnly = true;
+    s = s.slice(1);
+  }
+  // 剥掉 scheme（http://、https://）与协议相对前缀（//）
+  s = s.replace(/^[a-z][a-z0-9+.-]*:\/\//i, '').replace(/^\/\//, '');
+  // 剥掉 userinfo（user:pass@host）
+  const at = s.lastIndexOf('@');
+  if (at >= 0) s = s.slice(at + 1);
+  // 剥掉路径 / 查询串 / 锚点
+  s = s.split(/[/?#]/)[0];
+  // 剥掉端口
+  s = s.replace(/:\d+$/, '');
+  s = s.trim().toLowerCase();
+  // 去掉结尾的点（FQDN 写法 example.com.）
+  s = s.replace(/\.+$/, '');
+  if (!s) return '';
+  // 只接受合法域名（label = 字母数字/连字符，且不能以连字符开头或结尾）
+  if (!/^[a-z0-9]([a-z0-9-]*[a-z0-9])?(\.[a-z0-9]([a-z0-9-]*[a-z0-9])?)*$/.test(s)) return '';
+  return subOnly ? `.${s}` : s;
+}
+
+/**
+ * 规范化外站跳转白名单（纯函数，不碰数据库，便于复用与测试）：
+ * 入参可为多行字符串或字符串数组 → 逐条归一化、去空、去重（保留首次出现顺序）；
+ * 条目之间可用换行或逗号分隔。返回规范化后的条目数组。
+ */
+export function normalizeExternalLinkWhitelist(value) {
+  const raw = Array.isArray(value) ? value.join('\n') : String(value ?? '');
+  const seen = new Set();
+  const out = [];
+  for (const line of raw.split(/[\r\n]+/)) {
+    for (const part of line.split(',')) {
+      const entry = normalizeExternalLinkEntry(part);
+      if (!entry || seen.has(entry)) continue;
+      seen.add(entry);
+      out.push(entry);
+    }
+  }
+  return out;
+}
+
 /**
  * 站点配置：存 settings 表（key/value），带内存缓存。
  * 后台修改后立即失效缓存 → 下一次读取生效，无需重启。
@@ -104,6 +162,10 @@ const DEFAULTS = {
   recaptcha_site_key: '',
   recaptcha_secret_key: '',
   recaptcha_verify_api: '',
+  // 外站跳转白名单（每行一个域名）：命中的域名点击跳转时不弹「是否前往外站」确认气泡。
+  // 支持 example.com（含任意子域）、.example.com / *.example.com（仅子域），
+  // 也可直接粘贴完整 URL（保存时归一化，只取主机名）。
+  external_link_whitelist: '',
   // 第三方头像转存：重定向跟随上限（0–12 跳）与总超时（1–300 秒），后台可改
   avatar_redirect_hops: '12',
   avatar_timeout_seconds: '60',
@@ -381,5 +443,7 @@ export async function publicSiteInfo() {
     captchaTianaiTypes: tianaiCaptchaTypes(all.captcha_tianai_types),
     captchaGocaptchaTypes: gocaptchaCaptchaTypes(all.captcha_gocaptcha_types),
     recaptchaSiteKey: captchaProviderOf(all) === 'recaptcha' ? all.recaptcha_site_key || '' : '',
+    // 外站跳转白名单（数组）：解析后的域名条目；前端命中则直接放行跳转，不弹确认气泡
+    externalLinkWhitelist: normalizeExternalLinkWhitelist(all.external_link_whitelist),
   };
 }

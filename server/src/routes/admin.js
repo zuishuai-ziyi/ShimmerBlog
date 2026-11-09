@@ -3,7 +3,7 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
 import { signAdminToken, applyDefaultNameColor, makeLimiter } from '../utils.js';
-import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES, tianaiCaptchaTypes, gocaptchaCaptchaTypes, TIANAI_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES } from '../services/settings.js';
+import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES, tianaiCaptchaTypes, gocaptchaCaptchaTypes, TIANAI_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES, normalizeExternalLinkWhitelist } from '../services/settings.js';
 import {
   getAIConfig,
   normalizeFlow,
@@ -26,6 +26,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 const ADMIN_SELECT = 'id, email, name, name_color, bio, avatar_url, permissions, status, github_id, email_verified, created_at';
 const PERMISSION_KEYS = ['post'];
 const NAME_COLOR_RE = /^#?[0-9a-fA-F]{3,8}$/;
+
+// 外站跳转白名单上限（仅在保存侧生效）：最多 200 条、落库文本不超过 4000 字符
+const EXTERNAL_LINK_WHITELIST_MAX_ENTRIES = 200;
+const EXTERNAL_LINK_WHITELIST_MAX_CHARS = 4000;
 
 /** 审核员列表字段（不含密码） */
 const REVIEWER_SELECT = 'id, username, display_name, email, status, created_at, last_login_at, notify_prefs';
@@ -393,6 +397,23 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     if (body.captcha_gocaptcha_types !== undefined) {
       body.captcha_gocaptcha_types = gocaptchaCaptchaTypes(body.captcha_gocaptcha_types).join(',');
     }
+    // 外站跳转白名单（每行一个域名）：保存时归一化（剥 scheme/路径取主机名、去重、去空行、
+    // `.example.com`/`*.example.com` 统一为 `.example.com`），落库为规范化后的多行文本
+    // 上限保护：归一化后按原顺序截断——条目数不超过 200 且落库文本不超过 4000 字符，
+    // 超出部分直接丢弃（不报错、不改变匹配语义），防止管理员粘贴巨量文本落库并随 /api/site 下发
+    if (body.external_link_whitelist !== undefined) {
+      const entries = normalizeExternalLinkWhitelist(body.external_link_whitelist);
+      const kept = [];
+      let chars = 0;
+      for (const entry of entries) {
+        if (kept.length >= EXTERNAL_LINK_WHITELIST_MAX_ENTRIES) break;
+        // +1：条目之间用换行分隔，计入长度
+        if (chars + entry.length + 1 > EXTERNAL_LINK_WHITELIST_MAX_CHARS) break;
+        kept.push(entry);
+        chars += entry.length + 1;
+      }
+      body.external_link_whitelist = kept.join('\n');
+    }
     // 默认用户名颜色：格式校验（空 = 恢复内置默认）
     if (body.default_name_color !== undefined) {
       const c = String(body.default_name_color ?? '').trim();
@@ -415,7 +436,9 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
     const gg = await googleConfig();
     const smtp = await smtpConfig();
     const cap = await captchaConfig();
-    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp, captchaEnabled: cap.enabled });
+    // 白名单回传归一化后的条目（未提交该字段时也回传当前生效值）
+    const allAfter = await getAllSettings();
+    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp, captchaEnabled: cap.enabled, externalLinkWhitelist: normalizeExternalLinkWhitelist(allAfter.external_link_whitelist) });
   } catch (e) {
     next(e);
   }

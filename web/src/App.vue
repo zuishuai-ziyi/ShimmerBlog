@@ -26,9 +26,13 @@ import StarField from './components/StarField.vue';
 import TopBar from './components/TopBar.vue';
 import SiteFooter from './components/SiteFooter.vue';
 import ExternalLinkConfirm, { type ExternalLinkAnchor } from './components/ExternalLinkConfirm.vue';
+import { useSiteStore } from './stores/site';
+import { isUrlWhitelisted } from './utils/externalLink';
 
 // 管理后台使用独立界面，不叠加前台顶栏与星空
 const route = useRoute();
+// 站点设置（含外站跳转白名单）：白名单内的域名跳转时不弹确认气泡
+const site = useSiteStore();
 // 审核后台同样是独立界面（与 /admin 一致）：不显示前台顶栏、星空与页脚
 const bareLayout = computed(() => route.name === 'admin' || route.name === 'review');
 
@@ -71,6 +75,9 @@ function handleClick(e: MouseEvent) {
   if (url.protocol !== 'http:' && url.protocol !== 'https:') return;
   // 站内链接一律放过（含 /api/auth/* 的 OAuth 跳转、/uploads/* 静态资源）
   if (url.origin === location.origin) return;
+  // 白名单域名：管理员配置的可信站点，直接跳转不弹确认气泡；
+  // 白名单未就绪（空/加载失败）时不会命中 → 照常弹提示（宁可多提示不可漏提示）
+  if (isUrlWhitelisted(url, site.info.externalLinkWhitelist)) return;
 
   // 只拦默认跳转，不 stopPropagation，避免影响组件内其它点击逻辑
   e.preventDefault();
