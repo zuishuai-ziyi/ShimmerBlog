@@ -1,4 +1,4 @@
-import { getSetting } from './settings.js';
+import { getSetting, tianaiCaptchaTypes } from './settings.js';
 
 /**
  * 行为验证码（provider 可切换，后台「行为验证码」页配置）：
@@ -48,6 +48,35 @@ export async function captchaConfig() {
   };
 }
 
+/* ---------- tianai 出题签发登记表 ----------
+ * 为什么需要：tianai /check2 只能证明「这个 id 真实存在且已通过轨迹校验」，无法证明
+ * 「出题时用的题型在后台白名单内」——客户端过去可直接 GET {base}/gen?type=任意模式 取题。
+ * 现在出题只能经本服务代理（/api/captcha/tianai/gen），服务端从 whitelist 选模式并向 tianai
+ * 取题，把返回的 id 登记到这里；业务校验时只有登记表中存在（且未过期）的 id 才放行。
+ * 服务重启丢登记属预期（fail-closed）：用户重新弹一次验证码即可。
+ */
+const TIANAI_ISSUE_TTL = 10 * 60 * 1000; // 10 分钟
+const TIANAI_ISSUE_MAX = 20000; // 容量上限
+const tianaiIssued = new Map(); // id -> { type, expiresAt }
+// ① 白名单收紧后，已签发的 id 在 TTL（10 分钟）内仍然有效——收敛窗口，用户无需重新弹验证码；
+//    ② 该表为单进程内存，多实例/集群部署时需换成共享存储（如 Redis），否则签发与校验可能落到不同实例。
+
+/**
+ * 惰性清理：每次出题前顺带扫描，避免常驻 setInterval。
+ * 取舍：不额外占用进程定时器，清理成本摊到出题请求；TTL 相同 → Map 插入序即过期序。
+ */
+function tianaiIssueSweep(now) {
+  for (const [id, rec] of tianaiIssued) {
+    if (rec.expiresAt <= now) tianaiIssued.delete(id);
+  }
+  // 超容量时逐出最早过期项（插入序最早）
+  while (tianaiIssued.size >= TIANAI_ISSUE_MAX) {
+    const oldest = tianaiIssued.keys().next().value;
+    if (oldest === undefined) break;
+    tianaiIssued.delete(oldest);
+  }
+}
+
 /** 已消费验证码 key：key -> 消费时间（TTL 略大于服务端缓存 TTL 30 分钟，定期清理） */
 const consumed = new Map();
 const CONSUMED_TTL = 31 * 60 * 1000;
@@ -74,7 +103,7 @@ async function verifyGocaptcha(payload, cfg) {
       signal: AbortSignal.timeout(5000),
     });
     const j = await r.json().catch(() => null);
-    if (r.ok && j?.code === 200 && j?.data === 'ok') {
+    if (r.ok && Number(j?.code) === 200 && j?.data === 'ok') {
       consumeSweep();
       consumed.set(key, Date.now());
       return { ok: true };
@@ -113,13 +142,24 @@ async function verifyRecaptcha(payload, cfg) {
 
 /**
  * tianai（天爱滑块）二次验证：业务请求只带 key = captcha id，
- * 后端向服务 GET /check2?id= 确认「已通过轨迹校验且未被消费」，check2 命中即消费（一次一用）。
+ * 后端先核对「签发登记表」（只有经本服务白名单模式出题的 id 才在表中），
+ * 再向服务 GET /check2?id= 确认「已通过轨迹校验且未被消费」。
  * 服务端返回纯文本 true/false（Spring @ResponseBody boolean）。
  */
 async function verifyTianai(payload, cfg) {
   const key = String(payload?.key ?? '');
   if (!key) return { ok: false, status: 400, error: '请完成行为验证', code: 'CAPTCHA_REQUIRED' };
   if (consumed.has(key)) return { ok: false, status: 400, error: '验证已失效，请重新验证', code: 'CAPTCHA_FAILED' };
+
+  // 服务端强制：id 必须由本服务用后台白名单内的模式签发（未登记/已过期一律失败）。
+  const rec = tianaiIssued.get(key);
+  if (!rec || rec.expiresAt <= Date.now()) {
+    if (rec) tianaiIssued.delete(key);
+    return { ok: false, status: 400, error: '验证已失效，请重新验证', code: 'CAPTCHA_FAILED' };
+  }
+  // 先原子认领（删除）再向上游确认：并发同 id 只允许一个请求继续；
+  // check2 未通过/服务不可用即作废（前端会重新取题），保持 fail-closed 与一次性消费。
+  tianaiIssued.delete(key);
 
   const base = (await getSetting('captcha_verify_api')) || cfg.api;
   try {
@@ -129,13 +169,49 @@ async function verifyTianai(payload, cfg) {
     const txt = await r.text();
     if (r.ok && /"?true"?/i.test(txt.trim())) {
       consumeSweep();
-      consumed.set(key, Date.now());
+      consumed.set(key, Date.now()); // 二次防重放（登记表已消费，这里保留旧集合语义）
       return { ok: true };
     }
     return { ok: false, status: 400, error: '验证未通过，请重新验证', code: 'CAPTCHA_FAILED' };
   } catch {
     return { ok: false, status: 502, error: '验证码服务暂不可用，请稍后再试', code: 'CAPTCHA_UNAVAILABLE' };
   }
+}
+
+/**
+ * tianai 出题代理：服务端从后台白名单随机选模式 → 向 tianai /gen 取题 →
+ * 把 id 登记进签发表 → 原始响应 JSON 原样透传（同构 passthrough，不增删字段，
+ * tac SDK 依赖 code/data.id/data.type 等）。
+ * 客户端 URL 上的 ?type= 一律忽略（SDK 可能拼参），模式只由服务端决定。
+ */
+export async function issueTianaiCaptcha() {
+  const cfg = await captchaConfig();
+  if (!cfg.enabled || cfg.provider !== 'tianai') {
+    return { ok: false, status: 400, error: '当前未启用天爱验证码', code: 'CAPTCHA_UNAVAILABLE' };
+  }
+
+  // 与后台保存共用 settings.tianaiCaptchaTypes()（同一份归一化逻辑，避免双份实现漂移）
+  const types = tianaiCaptchaTypes(await getSetting('captcha_tianai_types'));
+  const type = types[Math.floor(Math.random() * types.length)] || types[0];
+
+  let body;
+  try {
+    const r = await fetch(`${cfg.api.replace(/\/+$/, '')}/gen?type=${encodeURIComponent(type)}`, {
+      method: 'GET',
+      signal: AbortSignal.timeout(8000),
+    });
+    body = await r.json().catch(() => null);
+    if (!r.ok || Number(body?.code) !== 200 || body?.data?.id === undefined || body?.data?.id === null) {
+      throw new Error('bad gen response');
+    }
+  } catch {
+    return { ok: false, status: 502, error: '验证码服务暂不可用，请稍后再试', code: 'CAPTCHA_UNAVAILABLE' };
+  }
+
+  const id = String(body.data.id);
+  tianaiIssueSweep(Date.now());
+  tianaiIssued.set(id, { type, expiresAt: Date.now() + TIANAI_ISSUE_TTL });
+  return { ok: true, body };
 }
 
 /**

@@ -10,6 +10,7 @@ import { adminRouter } from './routes/admin.js';
 import { reviewRouter } from './routes/review.js';
 import { spaceRouter } from './routes/space.js';
 import { siteRouter } from './routes/site.js';
+import { captchaRouter } from './routes/captcha.js';
 import { uploadsDir } from './uploads.js';
 
 // 生产环境由后端直接托管前端构建产物（宝塔「Node 项目」整站反代到本服务即可，
@@ -31,6 +32,8 @@ export function createApp() {
 
   app.use('/api', healthRouter);
   app.use('/api', siteRouter);
+  app.use('/api/captcha', captchaRouter);
+  // 注意：经反代部署时需 app.set('trust proxy', 1)，否则限流按代理 IP 聚合（所有用户共用一个 IP 桶）
   app.use('/api/auth', authRouter);
   app.use('/api/articles', articlesRouter);
   app.use('/api/admin', adminRouter);

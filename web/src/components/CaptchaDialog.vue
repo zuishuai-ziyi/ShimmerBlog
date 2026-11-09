@@ -15,8 +15,8 @@ let tacUid = 0;
  * - recaptcha：Google reCAPTCHA v2 勾选框（recaptcha.net 镜像加载，大陆可达），
  *   勾选通过后自动以 token 调用 action，无需点按钮；
  * - tianai：自托管天爱滑块（tianai-captcha-demo），按需加载本地 /tac/ 静态 SDK（tac.min.js + tac.css），
- *   SDK 在弹窗内滑块验证（自己向服务 /gen 取题、/check 校验轨迹），通过后拿到 captcha id，
- *   直接以 id 调用 action（后端再向服务 /check2 二次验证）。
+ *   SDK 在弹窗内滑块验证（取题经本站 /api/captcha/tianai/gen 代理、/check 仍直连 tianai 校验轨迹），
+ *   通过后拿到 captcha id，直接以 id 调用 action（后端再向服务 /check2 二次验证并核对签发表）。
  * 用法：
  *   <CaptchaDialog v-model:open="open" :action="doSave" />
  *   open.value = true 打开弹窗；验证完成后调用 action({key, value})，
@@ -80,11 +80,6 @@ function loadTac(): Promise<any> {
 
 const tacEl = ref<HTMLDivElement | null>(null);
 let tacInstance: any = null;
-/**
- * 本实例本次取题所用的天爱验证码类型：取题→校验期间保持不变
- * （校验只带 captcha id，不传 type；失败重试会重新 renderTianai() 重建滑块并重新随机 + 换新 URL 取题）
- */
-let tacType = 'SLIDER';
 
 async function renderTianai() {
   loadError.value = '';
@@ -104,16 +99,12 @@ async function renderTianai() {
     }
     destroyTianai();
     const base = site.info.captchaApi.replace(/\/+$/, '');
-    // 随机取一种天爱类型：只在打开弹窗/重建滑块时选一次，类型写进 /gen 的查询参数交给后端出题
-    const types =
-      Array.isArray(site.info.captchaTianaiTypes) && site.info.captchaTianaiTypes.length
-        ? site.info.captchaTianaiTypes
-        : ['SLIDER'];
-    const picked = types[Math.floor(Math.random() * types.length)] ?? 'SLIDER';
-    tacType = picked;
+    // 取题走同源代理（生产同源、开发 vite /api 代理）：题型（模式）由服务端从后台白名单选并登记，
+    // 客户端不再自选模式——否则可直连 tianai /gen?type= 用未授权模式过课后端无法察觉。
+    // 注意：tac SDK 的 requestCaptchaData() 固定用 POST 且不带 type，服务端 GET/POST 都受理。
     tacInstance = new TAC(
       {
-        requestCaptchaDataUrl: `${base}/gen?type=${tacType}`,
+        requestCaptchaDataUrl: '/api/captcha/tianai/gen',
         validCaptchaUrl: `${base}/check`,
         // 直接传 HTMLElement：SDK 内部 Dom 包装对对象走 this.dom = t 分支（不做 querySelector），
         // 比传 id 更稳——不受页面上其它同 id 容器影响（id 本身也已按实例唯一化）。

@@ -48,6 +48,17 @@ const mock = http.createServer((req, res) => {
     });
     return;
   }
+  if ((req.method === 'GET' || req.method === 'POST') && req.url?.startsWith('/gen')) {
+    // 天爱出题：返回 { code, data: { id, type, ... } }（tac SDK 只依赖 code/data.id/data.type）
+    if (mode === 'down') {
+      req.destroy();
+      return;
+    }
+    const type = new URL(req.url, 'http://mock').searchParams.get('type') || 'SLIDER';
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ code: 200, message: '', data: { id: `ta-${Date.now()}-${++genSeq}`, type, backgroundImage: '', templateImage: '' } }));
+    return;
+  }
   if (req.method === 'GET' && req.url?.startsWith('/check2')) {
     // 天爱滑块二次验证：返回纯文本 true/false
     if (mode === 'down') {
@@ -96,8 +107,9 @@ async function req(method, path, { token, body } = {}) {
   return { status: res.status, data };
 }
 
-// 每次「取题」都会得到新 key（真实流程 get-data 每次返回新的 captcha_key），这里用自增 key 模拟
+// 每次「取题」都会得到新 key（真实流程 get-data / tianai /gen 每次返回新 id），这里用自增 key 模拟
 let keySeq = 0;
+let genSeq = 0;
 const good = () => ({ key: `k-${Date.now()}-${++keySeq}`, value: '10,20,30,40' }); // 带时间戳：服务端 consumed Map（31min TTL）跨轮不碰撞
 
 /* ---------- 前置：管理员登录 + 备份并开启验证码配置 ---------- */
@@ -116,6 +128,7 @@ const oldCfg = {
   captcha_api: cur.data.settings.captcha_api ?? '',
   captcha_verify_api: cur.data.settings.captcha_verify_api ?? '',
   captcha_id: cur.data.settings.captcha_id ?? 'click-default-ch',
+  captcha_tianai_types: cur.data.settings.captcha_tianai_types ?? 'SLIDER',
   recaptcha_site_key: cur.data.settings.recaptcha_site_key ?? '',
   recaptcha_verify_api: cur.data.settings.recaptcha_verify_api ?? '',
 };
@@ -300,19 +313,26 @@ r = await req('POST', '/auth/login', { body: { email: MAIL2, password: 'pass1234
 ok('recaptcha 服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
 
-/* ---------- 天爱滑块 tianai（provider 切换 + /check2 二次验证 mock） ---------- */
+/* ---------- 天爱滑块 tianai（服务端出题代理 + /check2 二次验证 + 签发表强制） ---------- */
 r = await req('PUT', '/admin/settings', {
   token: adminToken,
-  body: { captcha_provider: 'tianai', captcha_api: `http://127.0.0.1:${MOCK_PORT}` },
+  body: { captcha_provider: 'tianai', captcha_api: `http://127.0.0.1:${MOCK_PORT}`, captcha_tianai_types: 'SLIDER' },
 });
 ok('切到 tianai 200 且生效', r.status === 200 && r.data.captchaEnabled === true, JSON.stringify(r.data));
 r = await req('GET', '/site');
 ok('/site 暴露 captchaProvider=tianai + captchaApi', r.data.captchaEnabled === true && r.data.captchaProvider === 'tianai' && r.data.captchaApi === `http://127.0.0.1:${MOCK_PORT}`, JSON.stringify(r.data));
 
+// 出题代理（tac SDK 用 POST，故两个方法都应 200）+ 只在白名单内选模式
+r = await req('POST', '/captcha/tianai/gen');
+ok('tianai 出题代理 POST 200 且返回 tianai JSON', r.status === 200 && r.data?.code === 200 && !!r.data?.data?.id, JSON.stringify(r.data));
+r = await req('GET', '/captcha/tianai/gen?type=ROTATE');
+ok('tianai 出题代理 GET 忽略客户端 type、按白名单出题', r.status === 200 && r.data?.data?.type === 'SLIDER', JSON.stringify(r.data));
+
 // 换新账号分桶：loginLimiter 15min/10 次按 ip:email 计数（MAIL2 桶在 recaptcha 段已用多次）
 const MAILT = `cap3-${Date.now()}@shimmer.dev`;
-r = await req('POST', '/auth/send-code', { body: { email: MAILT, purpose: 'register', captcha: good() } });
-ok('tianai 段 send-code 200（key 二次验证通过）', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
+const taGet = async () => (await req('GET', '/captcha/tianai/gen')).data.data.id;
+r = await req('POST', '/auth/send-code', { body: { email: MAILT, purpose: 'register', captcha: { key: await taGet() } } });
+ok('tianai 段 send-code 200（签发 id 二次验证通过）', r.status === 200 && r.data.sent === true, JSON.stringify(r.data));
 r = await req('POST', '/auth/register', { body: { email: MAILT, password: 'pass123456', name: 'x', code: r.data.devCode || (await latestCode(MAILT, 'register')) } });
 ok('tianai 段测试账号就绪 201', r.status === 201, JSON.stringify(r.data));
 
@@ -321,26 +341,37 @@ mode = 'ok';
 r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456' } });
 ok('tianai 缺 key 400', r.status === 400 && r.data.code === 'CAPTCHA_REQUIRED', JSON.stringify(r.data));
 
+// 未登记的假 id → 400 CAPTCHA_FAILED（服务端签发表强制生效，即使 check2 会返回 true）
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: `ta-fake-${Date.now()}` } } });
+ok('tianai 未登记 id 400 CAPTCHA_FAILED', r.status === 400 && r.data.code === 'CAPTCHA_FAILED', JSON.stringify(r.data));
+
 // /check2 未通过 → 400 CAPTCHA_FAILED（mode=failure → mock 返回 false）
+const taFailId = await taGet();
 mode = 'failure';
-r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: `ta-fail-${Date.now()}` } } });
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: taFailId } } });
 ok('tianai check2 未通过 400', r.status === 400 && r.data.code === 'CAPTCHA_FAILED', JSON.stringify(r.data));
+mode = 'ok';
 
 // 通过 → 穿过验证码层（错误密码 401）
-mode = 'ok';
-const taId = `ta-${Date.now()}`;
+const taId = await taGet();
 r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'wrong-pass', captcha: { key: taId } } });
 ok('tianai 通过后到密码校验 401', r.status === 401, JSON.stringify(r.data));
 
-// id 一次一用（防重放：服务端已消费）
+// id 一次一用（防重放：签发表已消费）
 r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: taId } } });
 ok('tianai 同 id 重放 400', r.status === 400 && /已失效/.test(r.data.error || ''), JSON.stringify(r.data));
 
-// 服务不可用 → 502 fail-closed
+// 服务不可用 → 502 fail-closed（先取到已签发的 id，再断开 mock）
+const taDownId = await taGet();
 mode = 'down';
-r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: `ta-down-${Date.now()}` } } });
+r = await req('POST', '/auth/login', { body: { email: MAILT, password: 'pass123456', captcha: { key: taDownId } } });
 ok('tianai 服务不可用 502', r.status === 502 && /暂不可用/.test(r.data.error || ''), JSON.stringify(r.data));
 mode = 'ok';
+
+// 非 tianai provider 时出题代理拒绝
+r = await req('PUT', '/admin/settings', { token: adminToken, body: { captcha_provider: 'gocaptcha', captcha_tianai_types: 'SLIDER' } });
+r = await req('GET', '/captcha/tianai/gen');
+ok('provider=gocaptcha 时出题代理 400', r.status === 400 && r.data.code === 'CAPTCHA_UNAVAILABLE', JSON.stringify(r.data));
 
 /* ---------- 还原 ---------- */
 r = await req('PUT', '/admin/settings', {
