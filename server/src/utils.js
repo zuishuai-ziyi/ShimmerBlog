@@ -1,5 +1,6 @@
 import jwt from 'jsonwebtoken';
 import { config } from './config.js';
+import { pool } from './db.js';
 import { defaultNameColor } from './services/settings.js';
 
 export function signToken(user) {
@@ -16,8 +17,30 @@ export function signReviewerToken(reviewer) {
   return jwt.sign({ reviewer: reviewer.id }, config.jwtSecret + ':reviewer', { expiresIn: '12h' });
 }
 
-export async function publicUser(u) {
+/**
+ * 第三方账号绑定（user_oauth_accounts 表）：对外只给 provider / provider_user_id / created_at。
+ * users 表里的 github_id / google_id 旧列已废弃，绑定关系以绑定表为唯一数据源。
+ */
+export async function getUserOAuthAccounts(userId) {
+  if (!userId) return [];
+  const [rows] = await pool.query(
+    'SELECT provider_slug, provider_user_id, created_at FROM user_oauth_accounts WHERE user_id = ? ORDER BY id ASC',
+    [userId]
+  );
+  return rows.map((r) => ({
+    provider: r.provider_slug,
+    provider_user_id: r.provider_user_id,
+    created_at: r.created_at,
+  }));
+}
+
+/**
+ * 对外的用户视图。
+ * oauthAccounts 可选：传入数组时按传入值输出；不传则自动查 user_oauth_accounts 补全。
+ */
+export async function publicUser(u, oauthAccounts) {
   if (!u) return null;
+  const accounts = Array.isArray(oauthAccounts) ? oauthAccounts : await getUserOAuthAccounts(u.id);
   return {
     id: u.id,
     email: u.email,
@@ -27,8 +50,12 @@ export async function publicUser(u) {
     avatar_url: u.avatar_url,
     bio: u.bio || '',
     status: u.status,
-    github_id: u.github_id,
-    google_id: u.google_id ?? null,
+    // 已绑定的第三方账号（数组）；旧的 github_id / google_id 字段已移除
+    oauth_accounts: accounts.map((a) => ({
+      provider: a.provider,
+      provider_user_id: a.provider_user_id,
+      created_at: a.created_at,
+    })),
     has_password: !!u.password_hash,
     email_verified: !!u.email_verified,
     created_at: u.created_at,

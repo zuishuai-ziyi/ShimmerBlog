@@ -183,8 +183,8 @@
         </div>
 
         <!-- 第三方账号绑定：直接列在卡片内（不再套小节标题与分隔线） -->
-        <div v-for="p in bindProviders" :key="p" class="bind-row">
-          <span class="bind-name">{{ p === 'github' ? 'GitHub' : 'Google' }}</span>
+        <div v-for="p in bindProviders" :key="p.slug" class="bind-row">
+          <span class="bind-name">{{ p.name }}</span>
           <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
           <button
             v-if="bound(p)"
@@ -193,17 +193,16 @@
             :disabled="!!binding || !!bindLoading"
             @click="unbind(p)"
           >
-            {{ binding === p ? '解绑中…' : '解除绑定' }}
+            {{ binding === p.slug ? '解绑中…' : '解除绑定' }}
           </button>
           <!-- 绑定必须走 XHR：整页 <a href> 不会带 Authorization 头，后端 authRequired 会判成未登录 -->
           <button
-            v-else-if="p === 'github' ? site.info.githubEnabled : site.info.googleEnabled"
+            v-else
             class="btn-ghost bind-link"
             type="button"
             :disabled="!!binding || !!bindLoading"
             @click="bind(p)"
-          >绑定 {{ p === 'github' ? 'GitHub' : 'Google' }}</button>
-          <span v-else class="bind-na">站点未启用</span>
+          >绑定 {{ p.name }}</button>
         </div>
         <p class="field-hint">绑定后可用对应第三方账号一键登录；解绑前请确保仍有密码或其他第三方可登录。</p>
 
@@ -264,6 +263,7 @@ import { formatDateTime } from '../utils/format';
 import { pendingStatusLabel, rejectedStatusLabel } from '../utils/review';
 import type { Article, ArticleBrief, ArticleReview, ReviewState } from '../types';
 import type { User } from '../stores/auth';
+import type { OAuthProvider } from '../stores/site';
 import bundledAvatar from '../assets/default-avatar.svg';
 import ArticleEditor from '../components/ArticleEditor.vue';
 import ArticlePreview from '../components/ArticlePreview.vue';
@@ -272,6 +272,8 @@ import ArticleReviewPanel from '../components/ArticleReviewPanel.vue';
 // 用户默认头像：后台可设置，未设置时用内置图
 const site = useSiteStore();
 const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
+// 第三方登录入口列表（oauthProviders）来自站点配置，未加载时先拉一次
+if (!site.loaded) site.fetch();
 
 const tabs = [
   { key: 'articles', label: '我的文章' },
@@ -588,19 +590,26 @@ async function uploadAvatar(ev: Event) {
   }
 }
 
-/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见；绑定了多个时分开两个按钮让用户选择来源） */
+/** 手动从第三方同步头像（仅绑定过第三方账号的用户可见；绑定了多个时分开多个按钮让用户选择来源） */
 const refreshingAvatar = ref(false);
+/** 已绑定的第三方 provider（slug 列表，取自用户对象的 oauth_accounts） */
 const oauthAvatarSources = computed(() => {
-  const list: Array<'github' | 'google'> = [];
-  if (auth.user?.github_id) list.push('github');
-  if (auth.user?.google_id) list.push('google');
+  const list: string[] = [];
+  for (const a of auth.user?.oauth_accounts ?? []) {
+    const slug = String(a.provider || '').trim().toLowerCase();
+    if (slug && !list.includes(slug)) list.push(slug);
+  }
   return list;
 });
-function oauthAvatarLabel(p: 'github' | 'google') {
-  if (refreshingAvatar.value) return '同步中…';
-  return oauthAvatarSources.value.length > 1 ? `从 ${p === 'github' ? 'GitHub' : 'Google'} 同步头像` : '从第三方同步头像';
+/** provider slug → 展示名（站点配置里查；已停用的 provider 查不到时用 slug 兜底） */
+function providerName(slug: string) {
+  return site.info.oauthProviders.find((p) => p.slug === slug)?.name || slug;
 }
-async function refreshOAuthAvatar(provider?: 'github' | 'google') {
+function oauthAvatarLabel(p: string) {
+  if (refreshingAvatar.value) return '同步中…';
+  return oauthAvatarSources.value.length > 1 ? `从 ${providerName(p)} 同步头像` : '从第三方同步头像';
+}
+async function refreshOAuthAvatar(provider?: string) {
   if (refreshingAvatar.value) return;
   refreshingAvatar.value = true;
   profileError.value = '';
@@ -772,22 +781,33 @@ function onPasswordChanged(user: User | null, message?: string) {
   if (user) auth.user = user;
   accountNotice.value = message || '密码已修改';
   // 改密提示归账户卡：清掉公开资料卡里可能残留的旧提示，以及上一轮绑定/解绑的旧提示
-  // （两者共用同一段提示位，不清会出现「刚解绑 GitHub 却显示密码已修改」）
+  // （两者共用同一段提示位，不清会出现「刚解绑第三方账号却显示密码已修改」）
   profileError.value = '';
   profileNotice.value = '';
   bindError.value = '';
   bindNotice.value = '';
 }
 
-// ===== 第 63 轮：第三方账号绑定/解绑 =====
-const bindProviders = ['github', 'google'] as const;
-type BindProvider = (typeof bindProviders)[number];
-function bound(p: BindProvider) {
-  return p === 'github' ? !!auth.user?.github_id : !!auth.user?.google_id;
+// ===== 第三方账号绑定/解绑 =====
+// 可绑定的第三方 provider：来自站点配置 /api/site 的 oauthProviders（只含已启用且配置齐全的）
+// 另外把「已绑定但站点已停用/删除」的 provider 补进来：否则这些残留绑定在界面上看不到，也就解绑不掉
+const bindProviders = computed<OAuthProvider[]>(() => {
+  const list = site.info.oauthProviders ?? [];
+  const known = new Set(list.map((p) => p.slug));
+  const extra = (auth.user?.oauth_accounts ?? [])
+    .map((a) => a.provider)
+    .filter((slug) => !!slug && !known.has(slug))
+    .map((slug) => ({ slug, name: providerName(slug), type: 'generic' as const }));
+  return [...list, ...extra];
+});
+/** 是否已绑定该 provider：查用户对象的 oauth_accounts（provider 存的是 slug） */
+function bound(p: OAuthProvider) {
+  return !!auth.user?.oauth_accounts?.some((a) => a.provider === p.slug);
 }
-const binding = ref<'' | BindProvider>('');
+/** 正在解绑的 provider slug（空 = 无） */
+const binding = ref('');
 /** 绑定流程进行中（正在换取第三方授权地址），用于按钮禁用与防重复点击 */
-const bindLoading = ref<'' | BindProvider>('');
+const bindLoading = ref('');
 const bindNotice = ref('');
 const bindError = ref('');
 /** 第三方绑定失败的错误码 → 中文文案（后端只往 URL 里放稳定错误码，异常文本不会外泄） */
@@ -809,14 +829,14 @@ function bindFailText(code: string): string {
   return text.startsWith('绑定失败') ? text : `绑定失败：${text}`;
 }
 /** 绑定第三方账号：先用带 Authorization 头的 XHR 换授权地址，再整页跳到第三方授权页 */
-async function bind(p: BindProvider) {
+async function bind(p: OAuthProvider) {
   if (binding.value || bindLoading.value) return;
-  bindLoading.value = p;
+  bindLoading.value = p.slug;
   // 与解绑提示共用同一段提示位：先清掉旧结果，避免本次结果被旧提示盖住
   bindNotice.value = '';
   bindError.value = '';
   try {
-    const { data } = await http.get<{ url?: string }>(`/auth/bind/${p}?json=1`);
+    const { data } = await http.get<{ url?: string }>(`/auth/bind/${p.slug}?json=1`);
     if (!data?.url) {
       bindError.value = '未获取到第三方授权地址，请稍后重试';
       bindLoading.value = '';
@@ -848,15 +868,15 @@ async function bind(p: BindProvider) {
     bindLoading.value = '';
   }
 }
-async function unbind(p: BindProvider) {
+async function unbind(p: OAuthProvider) {
   if (binding.value) return;
-  binding.value = p;
+  binding.value = p.slug;
   // 与改密提示共用同一段提示位：先清掉上一次改密结果，否则本次解绑结果会被旧提示盖住
   accountNotice.value = '';
   bindNotice.value = '';
   bindError.value = '';
   try {
-    const { data } = await http.delete<{ user: any; message: string }>(`/auth/oauth/${p}`);
+    const { data } = await http.delete<{ user: any; message: string }>(`/auth/oauth/${p.slug}`);
     if (data.user) auth.user = data.user;
     bindNotice.value = data.message || '已解绑';
   } catch (e) {
@@ -1441,12 +1461,6 @@ onMounted(async () => {
 .bind-row .bind-link {
   text-decoration: none;
   margin-left: auto;
-}
-.bind-na {
-  margin-left: auto;
-  font-size: 12.5px;
-  /* 前台未定义 --text-3，直接写实值 */
-  color: rgba(255, 255, 255, 0.5);
 }
 .field-hint {
   font-size: 12.5px;

@@ -32,7 +32,7 @@
         <nav>
           <button :class="{ on: tab === 'site' }" @click="tab = 'site'">站点</button>
           <button :class="{ on: tab === 'mail' }" @click="tab = 'mail'">邮件</button>
-          <button :class="{ on: tab === 'oauth' }" @click="tab = 'oauth'">第三方登录</button>
+          <button :class="{ on: tab === 'oauth' }" @click="tab = 'oauth'">SSO 登录</button>
           <button :class="{ on: tab === 'users' }" @click="tab = 'users'">用户</button>
           <button :class="{ on: tab === 'articles' }" @click="tab = 'articles'">文章</button>
           <button :class="{ on: tab === 'review' }" @click="tab = 'review'">审核</button>
@@ -233,28 +233,42 @@
             </div>
           </section>
 
-          <!-- ============ 第三方登录 ============ -->
+          <!-- ============ SSO 登录 ============ -->
           <section v-if="tab === 'oauth'" class="pane">
             <div class="card">
-              <h2>GitHub 登录</h2>
-              <p class="hint status" :class="{ ok: githubEnabled }">{{ githubEnabled ? '● 已配置，登录页展示 GitHub 按钮' : '○ 未配置（配置后登录页自动展示）' }}</p>
+              <div class="list-head">
+                <h2>SSO 登录方式 <small>{{ providers.length }} 种</small></h2>
+                <button class="primary" :disabled="providerBusy" @click="openProviderCreate()">+ 添加登录方式</button>
+              </div>
               <p class="hint">
-                在 <a :href="ghAppUrl" target="_blank" rel="noopener">GitHub OAuth Apps</a> 创建应用，
-                授权回调地址填：<code>{{ callbackBase }}/api/auth/github/callback</code>
+                登录页按排序展示「已启用且 Client ID / Secret 齐全」的登录方式。停用只是隐藏登录入口，用户绑定仍保留；删除会同时解除所有用户与该方式的绑定。
               </p>
-              <label class="row"><span>Client ID</span><input v-model.trim="oauthForm.github_client_id" placeholder="Ov23li… / Iv1.…" autocomplete="off" /></label>
-              <label class="row"><span>Client Secret</span><input v-model="oauthForm.github_client_secret" type="password" :placeholder="ghSecretSet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
-            </div>
-
-            <div class="card">
-              <h2>Google 登录</h2>
-              <p class="hint status" :class="{ ok: googleEnabled }">{{ googleEnabled ? '● 已配置，登录页展示 Google 按钮' : '○ 未配置（配置后登录页自动展示）' }}</p>
-              <p class="hint">
-                在 <a :href="ggAppUrl" target="_blank" rel="noopener">Google Cloud 控制台</a> 创建 OAuth 客户端（Web 应用），
-                已获授权的重定向 URI 填：<code>{{ callbackBase }}/api/auth/google/callback</code>
-              </p>
-              <label class="row"><span>Client ID</span><input v-model.trim="oauthForm.google_client_id" placeholder="xxxxx.apps.googleusercontent.com" autocomplete="off" /></label>
-              <label class="row"><span>Client Secret</span><input v-model="oauthForm.google_client_secret" type="password" :placeholder="ggSecretSet ? '已配置，留空保持不变' : '未配置'" autocomplete="new-password" /></label>
+              <div v-if="!providers.length" class="hint">还没有配置任何登录方式，点右上角「添加登录方式」新建（GitHub / Google / 任意兼容 OAuth2 的站点）。</div>
+              <div v-else class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr><th>名称</th><th>标识</th><th>类型</th><th>Client ID</th><th>状态</th><th>排序</th><th></th></tr>
+                  </thead>
+                  <tbody>
+                    <tr v-for="p in providers" :key="p.id">
+                      <td>{{ p.name }}</td>
+                      <td class="dim"><code>{{ p.slug }}</code></td>
+                      <td><span class="pill type-tag" :class="p.type">{{ providerTypeLabel(p.type) }}</span></td>
+                      <td class="dim"><code :title="p.client_id">{{ shortenId(p.client_id) }}</code></td>
+                      <td>
+                        <button class="pill" :class="providerState(p).cls" :disabled="providerBusy" :title="p.enabled ? '点击停用' : '点击启用'" @click="toggleProvider(p)">
+                          {{ providerState(p).text }}
+                        </button>
+                      </td>
+                      <td class="dim">{{ p.sort_order }}</td>
+                      <td class="row-ops">
+                        <button class="ghost sm" @click="openProviderEdit(p)">编辑</button>
+                        <button class="ghost sm danger" :disabled="providerBusy" @click="removeProvider(p)">删除</button>
+                      </td>
+                    </tr>
+                  </tbody>
+                </table>
+              </div>
             </div>
 
             <div class="card">
@@ -272,7 +286,7 @@
 
             <div class="ops">
               <button class="primary" :disabled="saving" @click="saveOauthSettings">
-                {{ saving ? '保存中…' : '保存第三方登录设置' }}
+                {{ saving ? '保存中…' : '保存代理与头像设置' }}
               </button>
               <span v-if="flash" class="flash">{{ flash }}</span>
             </div>
@@ -304,7 +318,8 @@
                           <img :src="u.avatar_url || defaultAvatar" class="mini-avatar" alt="" />
                           <div>
                             <div class="u-name" :style="u.name_color ? { color: u.name_color } : undefined">{{ u.name }}</div>
-                            <div class="dim">{{ u.email }}<template v-if="u.github_id"> · GitHub</template><template v-if="u.google_id"> · Google</template></div>
+                            <div class="dim">{{ u.email }}</div>
+                            <div class="dim">第三方：{{ (u.oauth_providers ?? []).length ? (u.oauth_providers ?? []).map((x) => x.provider).join('、') : '-' }}</div>
                           </div>
                         </div>
                       </td>
@@ -683,6 +698,53 @@
         <p v-if="rejectMsg" class="hint">{{ rejectMsg }}</p>
       </div>
     </div>
+
+    <!-- SSO 登录方式（新增 / 编辑）弹层 -->
+    <div v-if="providerOpen" class="modal-mask" @click.self="closeProvider()">
+      <div class="modal wide">
+        <h3>{{ providerEditing ? '编辑登录方式' : '添加登录方式' }}</h3>
+        <label class="row"><span>名称</span><input v-model.trim="providerForm.name" placeholder="登录页展示的名称，如 GitHub / Gitee" /></label>
+        <label class="row"><span>标识 slug</span><input v-model.trim="providerForm.slug" placeholder="小写字母 / 数字 / 下划线 / 短横线，如 gitee" /></label>
+        <p class="hint">slug 决定登录与回调地址（/api/auth/{slug}/callback），只能用小写字母、数字、下划线或短横线；改 slug 不会丢用户绑定。</p>
+        <label class="row">
+          <span>类型</span>
+          <select v-model="providerForm.type" @change="onProviderTypeChange">
+            <option value="github">GitHub（内置端点）</option>
+            <option value="google">Google（内置端点）</option>
+            <option value="generic">通用 OAuth2（自定义端点）</option>
+          </select>
+        </label>
+        <p v-if="providerForm.type === 'github'" class="hint">
+          在 <a :href="ghAppUrl" target="_blank" rel="noopener">GitHub OAuth Apps</a> 创建应用，Authorization callback URL 填下面的回调地址。
+        </p>
+        <p v-else-if="providerForm.type === 'google'" class="hint">
+          在 <a :href="ggAppUrl" target="_blank" rel="noopener">Google Cloud 控制台</a> 创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填下面的回调地址。
+        </p>
+        <label class="row"><span>Client ID</span><input v-model.trim="providerForm.client_id" placeholder="第三方应用的 Client ID" autocomplete="off" /></label>
+        <label class="row"><span>Client Secret</span><input v-model="providerForm.client_secret" type="password" :placeholder="providerSecretPlaceholder" autocomplete="new-password" @input="onProviderSecretInput" /></label>
+        <div class="ops inline">
+          <button v-if="providerSecretSet" class="ghost sm" @click="clearProviderSecret()">清除密钥</button>
+          <span v-if="providerSecretClear" class="hint">保存后将清空该密钥</span>
+        </div>
+        <details class="adv">
+          <summary>高级选项（授权 / 令牌 / 用户信息端点）</summary>
+          <label class="row"><span>授权地址</span><input v-model.trim="providerForm.authorize_url" :placeholder="providerEndpointPlaceholder('authorize_url')" /></label>
+          <label class="row"><span>令牌地址</span><input v-model.trim="providerForm.token_url" :placeholder="providerEndpointPlaceholder('token_url')" /></label>
+          <label class="row"><span>用户信息地址</span><input v-model.trim="providerForm.userinfo_url" :placeholder="providerEndpointPlaceholder('userinfo_url')" /></label>
+          <label class="row"><span>scope</span><input v-model.trim="providerForm.scope" :placeholder="providerEndpointPlaceholder('scope')" /></label>
+          <p class="hint">GitHub / Google 留空即用内置预设端点；通用类型三个地址必填且须以 https:// 开头。</p>
+        </details>
+        <label class="row check"><input type="checkbox" v-model="providerForm.enabled" /><span>启用（登录页展示该方式）</span></label>
+        <label class="row"><span>排序</span><input v-model.number="providerForm.sort_order" type="number" min="0" step="1" /></label>
+        <p class="hint cb">回调地址：<code>{{ providerCallbackUrl }}</code></p>
+        <p class="hint">{{ providerCallbackHint }}</p>
+        <div class="modal-ops">
+          <button class="ghost" @click="closeProvider()">取消</button>
+          <button class="primary" :disabled="providerBusy" @click="saveProvider()">{{ providerBusy ? '保存中…' : '保存' }}</button>
+        </div>
+        <p v-if="providerMsg" class="hint err">{{ providerMsg }}</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -808,11 +870,7 @@ function showFlash(msg: string) {
 }
 
 const siteForm = reactive({ site_title: '', site_subtitle: '', site_description: '', about_subtitle: '', about_html: '', default_name_color: '', external_link_whitelist: '' });
-const oauthForm = reactive({ github_client_id: '', github_client_secret: '', google_client_id: '', google_client_secret: '', oauth_proxy_url: '', avatar_redirect_hops: '12', avatar_timeout_seconds: '60' });
-const githubEnabled = ref(false);
-const googleEnabled = ref(false);
-const ghSecretSet = ref(false);
-const ggSecretSet = ref(false);
+const oauthForm = reactive({ oauth_proxy_url: '', avatar_redirect_hops: '12', avatar_timeout_seconds: '60' });
 // 行为验证码（GoCaptcha 点选 / reCAPTCHA v2 勾选框，后台可切换）
 const captchaForm = reactive({
   captcha_provider: 'gocaptcha',
@@ -855,6 +913,8 @@ function isLastType(list: string[], value: string): boolean {
 }
 // 回调地址以站点配置 web_origin 为准（与后端 redirect_uri 同源：本地 http://localhost:5180，线上域名）；装载配置前先展示当前访问地址
 const callbackBase = ref(window.location.origin);
+/** 是否拿到了站点配置的 web_origin：没拿到时只显示相对路径回调地址 */
+const callbackBaseKnown = ref(false);
 const ghAppUrl = 'https://github.com/settings/developers';
 const ggAppUrl = 'https://console.cloud.google.com/apis/credentials';
 
@@ -930,16 +990,16 @@ interface AdminSettingsData {
   settings?: Record<string, string | undefined>;
   mailTemplates?: TplMeta[];
   smtpEnabled?: boolean;
-  githubEnabled?: boolean;
-  googleEnabled?: boolean;
   captchaEnabled?: boolean;
   captchaTypes?: CaptchaTypesPayload;
 }
 
 /**
  * 用后端设置回填站点 / 邮件 / 第三方登录 / 验证码表单。
- * 敏感字段（SMTP 密码、OAuth Secret、reCAPTCHA Secret）沿用后端的 '__KEEP__' 掩码，
+ * 敏感字段（SMTP 密码、reCAPTCHA Secret）沿用后端的 '__KEEP__' 掩码，
  * 与首次加载完全一致，不会把明文写进表单。
+ * 注：GitHub / Google 的 Client ID 与 Secret 已迁到 oauth_providers 表（后台「SSO 登录」页），
+ * 这里只回填仍属于「站点设置」的第三方登录项（出站代理、头像下载限制）。
  */
 function populateSettings(data: AdminSettingsData) {
   const s: Record<string, string | undefined> = data.settings ?? {};
@@ -969,19 +1029,14 @@ function populateSettings(data: AdminSettingsData) {
   smtpEnabled.value = !!data.smtpEnabled;
   smtpPassSet.value = s.smtp_pass === '__KEEP__';
   Object.assign(oauthForm, {
-    github_client_id: s.github_client_id ?? '',
-    github_client_secret: s.github_client_secret ?? '',
-    google_client_id: s.google_client_id ?? '',
-    google_client_secret: s.google_client_secret ?? '',
     oauth_proxy_url: s.oauth_proxy_url ?? '',
     avatar_redirect_hops: s.avatar_redirect_hops ?? '12',
     avatar_timeout_seconds: s.avatar_timeout_seconds ?? '60',
   });
-  githubEnabled.value = !!data.githubEnabled;
-  googleEnabled.value = !!data.googleEnabled;
-  ghSecretSet.value = s.github_client_secret === '__KEEP__';
-  ggSecretSet.value = s.google_client_secret === '__KEEP__';
-  if (s.web_origin) callbackBase.value = s.web_origin;
+  if (s.web_origin) {
+    callbackBase.value = s.web_origin;
+    callbackBaseKnown.value = true;
+  }
   Object.assign(captchaForm, {
     captcha_provider: s.captcha_provider === 'recaptcha' ? 'recaptcha' : s.captcha_provider === 'tianai' ? 'tianai' : 'gocaptcha',
     captcha_api: s.captcha_api ?? '',
@@ -1051,8 +1106,6 @@ async function saveSettings(keys: string[]): Promise<boolean> {
     if (keys.includes('smtp_secure')) body.smtp_secure = smtpSecureBool.value;
     const { data } = await adminHttp.put('/admin/settings', body);
     smtpEnabled.value = !!data.smtpEnabled;
-    githubEnabled.value = !!data.githubEnabled;
-    googleEnabled.value = !!data.googleEnabled;
     // 外站跳转白名单：服务端保存时会归一化（去空行/去重/只取主机名），
     // 把归一化结果写回表单再更新基线，否则表单里的原始文本与基线不一致，
     // 下一轮轮询回填会把表单判成「脏」而永久停摆
@@ -1079,8 +1132,307 @@ async function saveMailSettings() {
   await saveSettings([...keys, 'smtp_host', 'smtp_port', 'smtp_from', 'smtp_user', 'smtp_pass', 'smtp_secure']);
 }
 
+/** SSO 登录方式改走 oauth_providers 表（/admin/oauth-providers），这里只保存仍属于「站点设置」的键 */
 async function saveOauthSettings() {
-  await saveSettings(['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_proxy_url', 'avatar_redirect_hops', 'avatar_timeout_seconds']);
+  await saveSettings(['oauth_proxy_url', 'avatar_redirect_hops', 'avatar_timeout_seconds']);
+}
+
+/* ---- SSO 登录方式（oauth_providers 表） ---- */
+/** provider 类型：与后端 PROVIDER_TYPES 一致 */
+type ProviderType = 'github' | 'google' | 'generic';
+
+interface OauthProvider {
+  id: number;
+  slug: string;
+  name: string;
+  type: ProviderType;
+  client_id: string;
+  /** 后端只回 '__KEEP__'（有值）或 ''（空值），永不下发明文 */
+  client_secret: string;
+  /** 是否已设置密钥：用于占位提示与「登录页是否可用」判断 */
+  secret_set: boolean;
+  authorize_url: string;
+  token_url: string;
+  userinfo_url: string;
+  scope: string;
+  enabled: boolean | number;
+  sort_order: number;
+}
+
+/** 各类型的内置预设端点（行内留空即用预设，与后端 OAUTH_PRESETS 一致） */
+const PROVIDER_PRESETS: Record<ProviderType, { authorize_url: string; token_url: string; userinfo_url: string; scope: string }> = {
+  github: {
+    authorize_url: 'https://github.com/login/oauth/authorize',
+    token_url: 'https://github.com/login/oauth/access_token',
+    userinfo_url: 'https://api.github.com/user',
+    scope: 'read:user user:email',
+  },
+  google: {
+    authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_url: 'https://oauth2.googleapis.com/token',
+    userinfo_url: 'https://openidconnect.googleapis.com/v1/userinfo',
+    scope: 'openid email profile',
+  },
+  generic: { authorize_url: '', token_url: '', userinfo_url: '', scope: '' },
+};
+
+/** 系统保留 slug（与后端 RESERVED_PROVIDER_SLUGS 一致）：动态路由 /:slug 不能遮蔽它们 */
+const RESERVED_PROVIDER_SLUGS = new Set([
+  'login', 'register', 'logout', 'send-code', 'code', 'reset-password', 'bind', 'me',
+  'notify-prefs', 'profile', 'password', 'oauth', 'avatar', 'callback', 'api', 'admin',
+  'site', 'articles', 'article', 'space', 'review', 'captcha', 'health', 'uploads',
+  'settings', 'users', 'user', 'providers', 'public', 'search', 'home', 'index',
+  'favicon.ico', 'static', 'assets',
+]);
+const PROVIDER_SLUG_RE = /^[a-z0-9][a-z0-9_-]{0,49}$/;
+
+const providers = ref<OauthProvider[]>([]);
+const providerBusy = ref(false);
+const providerOpen = ref(false);
+/** 正在编辑的 provider；null = 新建 */
+const providerEditing = ref<OauthProvider | null>(null);
+const providerForm = reactive({
+  slug: '',
+  name: '',
+  type: 'generic' as ProviderType,
+  client_id: '',
+  client_secret: '',
+  authorize_url: '',
+  token_url: '',
+  userinfo_url: '',
+  scope: '',
+  enabled: true,
+  sort_order: 0,
+});
+/** 已设置密钥（编辑时提示「留空=不修改」） */
+const providerSecretSet = ref(false);
+/** 密钥提交语义：keep = 不改、set = 写入新值、clear = 清空 */
+const providerSecretMode = ref<'keep' | 'set' | 'clear'>('keep');
+const providerMsg = ref('');
+/** 类型下拉上一次的值：切换时用来判断端点是否还是上一类型的预设 */
+let providerPrevType: ProviderType = 'generic';
+
+function providerTypeLabel(t: string): string {
+  return t === 'github' ? 'GitHub' : t === 'google' ? 'Google' : '通用';
+}
+
+/** 列表里的 Client ID 缩略显示 */
+function shortenId(v: string): string {
+  const s = String(v ?? '');
+  if (!s) return '—';
+  return s.length > 20 ? `${s.slice(0, 18)}…` : s;
+}
+
+/** 状态：启用 + Client ID/密钥齐全才算登录页可用 */
+function providerState(p: OauthProvider): { text: string; cls: string } {
+  if (!p.enabled) return { text: '已停用', cls: 'disabled' };
+  if (!p.client_id || !p.secret_set) return { text: '启用但未配齐', cls: 'draft' };
+  return { text: '已启用', cls: 'active' };
+}
+
+const providerSecretPlaceholder = computed(() => {
+  if (providerSecretMode.value === 'clear') return '将清空此密钥';
+  return providerSecretSet.value ? '已设置，留空=不修改' : '未配置';
+});
+const providerSecretClear = computed(() => providerSecretMode.value === 'clear');
+
+/** 端点占位提示：github/google 提示内置预设，generic 提示必填 */
+function providerEndpointPlaceholder(field: 'authorize_url' | 'token_url' | 'userinfo_url' | 'scope'): string {
+  if (field === 'scope') {
+    return providerForm.type === 'generic' ? '可选，如 read:user' : `使用内置预设：${PROVIDER_PRESETS[providerForm.type].scope}`;
+  }
+  if (providerForm.type === 'generic') return '必填，须以 https:// 开头';
+  const preset = PROVIDER_PRESETS[providerForm.type][field];
+  return preset ? `使用内置预设：${preset}` : '使用内置预设';
+}
+
+/** 回调地址：{站点地址}/api/auth/{slug}/callback（web_origin 缺失时只给相对路径） */
+const providerCallbackUrl = computed(() => {
+  const slug = providerForm.slug.trim() || 'slug';
+  const path = `/api/auth/${slug}/callback`;
+  if (!callbackBaseKnown.value) return path;
+  return `${callbackBase.value.replace(/\/+$/, '')}${path}`;
+});
+
+const providerCallbackHint = computed(() =>
+  callbackBaseKnown.value
+    ? '把它填到第三方 OAuth 应用的回调地址（redirect URI / callback URL）。'
+    : '前面拼上你的站点域名后，填到第三方 OAuth 应用的回调地址。',
+);
+
+/** 切换类型：端点还空着（或还是上一类型的预设）时自动填入新类型的预设，方便微调 */
+function onProviderTypeChange() {
+  const next = providerForm.type;
+  const prevPreset = PROVIDER_PRESETS[providerPrevType];
+  const nextPreset = PROVIDER_PRESETS[next];
+  const urlFields = ['authorize_url', 'token_url', 'userinfo_url'] as const;
+  const stillEmpty = urlFields.every((f) => !providerForm[f]);
+  const stillPrev = urlFields.every((f) => providerForm[f] === prevPreset[f]);
+  if (stillEmpty || stillPrev) {
+    for (const f of urlFields) providerForm[f] = nextPreset[f];
+    if (!providerForm.scope || providerForm.scope === prevPreset.scope) providerForm.scope = nextPreset.scope;
+  }
+  providerPrevType = next;
+}
+
+function openProviderCreate() {
+  providerEditing.value = null;
+  Object.assign(providerForm, {
+    slug: '',
+    name: '',
+    type: 'generic' as ProviderType,
+    client_id: '',
+    client_secret: '',
+    authorize_url: '',
+    token_url: '',
+    userinfo_url: '',
+    scope: '',
+    enabled: true,
+    sort_order: providers.value.length,
+  });
+  providerSecretSet.value = false;
+  providerSecretMode.value = 'keep';
+  providerMsg.value = '';
+  providerPrevType = 'generic';
+  providerOpen.value = true;
+}
+
+function openProviderEdit(p: OauthProvider) {
+  providerEditing.value = p;
+  Object.assign(providerForm, {
+    slug: p.slug,
+    name: p.name,
+    type: p.type,
+    client_id: p.client_id,
+    client_secret: '',
+    authorize_url: p.authorize_url,
+    token_url: p.token_url,
+    userinfo_url: p.userinfo_url,
+    scope: p.scope,
+    enabled: !!p.enabled,
+    sort_order: p.sort_order,
+  });
+  providerSecretSet.value = !!p.secret_set;
+  providerSecretMode.value = 'keep';
+  providerMsg.value = '';
+  providerPrevType = p.type;
+  providerOpen.value = true;
+}
+
+function closeProvider() {
+  providerOpen.value = false;
+  providerEditing.value = null;
+}
+
+function onProviderSecretInput() {
+  providerSecretMode.value = 'set';
+}
+
+function clearProviderSecret() {
+  providerForm.client_secret = '';
+  providerSecretMode.value = 'clear';
+}
+
+/** 客户端校验：镜像后端 normalizeProviderInput 的规则（后端仍会再校一遍） */
+function validateProvider(): string {
+  const slug = providerForm.slug.trim().toLowerCase();
+  if (!slug) return '标识（slug）不能为空';
+  if (!PROVIDER_SLUG_RE.test(slug)) return '标识只能用小写字母、数字、下划线或短横线，长度 1–50';
+  if (RESERVED_PROVIDER_SLUGS.has(slug)) return `标识「${slug}」是系统保留字，请换一个`;
+  if (!providerForm.name.trim()) return '名称不能为空';
+  if (providerForm.name.trim().length > 100) return '名称最长 100 字';
+  if (!providerForm.client_id.trim()) return 'Client ID 不能为空';
+  if (providerForm.client_id.trim().length > 255) return 'Client ID 最长 255 字';
+  if (providerForm.scope.trim().length > 200) return 'scope 最长 200 字';
+  const urls: Array<['authorize_url' | 'token_url' | 'userinfo_url', string]> = [
+    ['authorize_url', '授权地址'],
+    ['token_url', '令牌地址'],
+    ['userinfo_url', '用户信息地址'],
+  ];
+  for (const [f, label] of urls) {
+    const v = providerForm[f].trim();
+    if (v && !/^https:\/\//i.test(v)) return `${label} 必须以 https:// 开头`;
+  }
+  if (providerForm.type === 'generic') {
+    for (const [f, label] of urls) if (!providerForm[f].trim()) return `通用类型必须填写${label}`;
+  }
+  return '';
+}
+
+async function saveProvider() {
+  const err = validateProvider();
+  if (err) {
+    providerMsg.value = err;
+      return;
+  }
+  providerBusy.value = true;
+  providerMsg.value = '';
+  try {
+    const body: Record<string, unknown> = {
+      slug: providerForm.slug.trim().toLowerCase(),
+      name: providerForm.name.trim(),
+      type: providerForm.type,
+      client_id: providerForm.client_id.trim(),
+      authorize_url: providerForm.authorize_url.trim(),
+      token_url: providerForm.token_url.trim(),
+      userinfo_url: providerForm.userinfo_url.trim(),
+      scope: providerForm.scope.trim(),
+      enabled: providerForm.enabled ? 1 : 0,
+      sort_order: Number(providerForm.sort_order) || 0,
+    };
+    if (providerSecretMode.value === 'clear') body.client_secret = '__CLEAR__';
+    else if (providerSecretMode.value === 'set') body.client_secret = providerForm.client_secret;
+    else body.client_secret = providerEditing.value ? '__KEEP__' : '';
+    const wasEdit = !!providerEditing.value;
+    if (wasEdit && providerEditing.value) await adminHttp.put(`/admin/oauth-providers/${providerEditing.value.id}`, body);
+    else await adminHttp.post('/admin/oauth-providers', body);
+    closeProvider();
+    showFlash(wasEdit ? '✓ 已保存登录方式' : '✓ 已添加登录方式');
+    await loadProviders(true);
+  } catch (e) {
+    providerMsg.value = '保存失败：' + errMsg(e);
+    } finally {
+    providerBusy.value = false;
+  }
+}
+
+/** 加载登录方式列表（含停用的） */
+async function loadProviders(silent = false) {
+  try {
+    const { data } = await adminHttp.get('/admin/oauth-providers');
+    providers.value = (data.items || []) as OauthProvider[];
+  } catch (e) {
+    if (!silent) showFlash('加载登录方式失败：' + errMsg(e));
+  }
+}
+
+/** 快捷启用 / 停用（停用只是隐藏入口，用户绑定保留） */
+async function toggleProvider(p: OauthProvider) {
+  providerBusy.value = true;
+  try {
+    await adminHttp.put(`/admin/oauth-providers/${p.id}`, { enabled: p.enabled ? 0 : 1 });
+    showFlash(p.enabled ? `已停用「${p.name}」` : `已启用「${p.name}」`);
+    await loadProviders(true);
+  } catch (e) {
+    showFlash('操作失败：' + errMsg(e));
+  } finally {
+    providerBusy.value = false;
+  }
+}
+
+/** 删除：后端会级联解除该 provider 的所有用户绑定 */
+async function removeProvider(p: OauthProvider) {
+  if (!confirm(`确定删除登录方式「${p.name}（${p.slug}）」？\n删除后将解除所有用户与此方式的绑定，且不可恢复。\n仅以此方式登录、且未设置密码的用户将无法再登录。`)) return;
+  providerBusy.value = true;
+  try {
+    await adminHttp.delete(`/admin/oauth-providers/${p.id}`);
+    showFlash(`已删除「${p.name}」`);
+    await loadProviders(true);
+  } catch (e) {
+    showFlash('删除失败：' + errMsg(e));
+  } finally {
+    providerBusy.value = false;
+  }
 }
 
 /* ---- 外站跳转白名单 ---- */
@@ -1286,8 +1638,8 @@ interface AdminUser {
   avatar_url: string | null;
   permissions: string[] | null;
   status: 'active' | 'disabled';
-  github_id: number | null;
-  google_id: string | null;
+  /** 该用户绑定的第三方登录方式（{ provider: slug, provider_user_id } 数组） */
+  oauth_providers?: Array<{ provider: string; provider_user_id: string }>;
   created_at: string;
 }
 
@@ -2150,6 +2502,8 @@ watch(tab, (t) => {
     loadReviewers();
     loadRecords();
   }
+  // 进入 SSO 页时拉一次登录方式列表（provider CRUD 不走 settings 轮询）
+  if (t === 'oauth') loadProviders();
 });
 
 /* ---------------- 轮询（静默刷新，不重建表单状态） ---------------- */
@@ -2193,6 +2547,7 @@ const anyModalOpen = computed(
     rwdOpen.value ||
     emOpen.value ||
     rejectOpen.value ||
+    providerOpen.value ||
     gateCaptchaOpen.value,
 );
 // 设置表单：30s。跳过：未登录 / 非设置类 tab / 有弹窗打开 / 图片上传中 / 页面隐藏。
@@ -2668,6 +3023,10 @@ onUnmounted(() => {
   color: var(--green);
 }
 
+.hint.err {
+  color: var(--red);
+}
+
 .hint.status {
   margin-top: -8px;
 }
@@ -3091,6 +3450,53 @@ onUnmounted(() => {
   color: var(--red);
   border-color: rgba(211, 56, 74, 0.4);
   background: var(--red-soft);
+}
+
+/* SSO 登录方式：类型徽标（不可点击，区别于可点击的状态 pill） */
+.pill.type-tag {
+  cursor: default;
+  padding: 2px 10px;
+  font-size: 12px;
+}
+
+.pill.type-tag.github {
+  color: var(--text-1);
+  background: #f2f5fa;
+}
+
+.pill.type-tag.google {
+  color: var(--blue);
+  background: var(--blue-soft);
+}
+
+.pill.type-tag.generic {
+  color: var(--text-2);
+  background: #f6f8fc;
+}
+
+/* SSO 弹层：高级折叠区 */
+.adv {
+  margin: 2px 0 14px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  background: #fbfcfe;
+}
+
+.adv summary {
+  cursor: pointer;
+  color: var(--text-2);
+  font-size: 13px;
+}
+
+.adv[open] summary {
+  margin-bottom: 10px;
+  color: var(--text-1);
+}
+
+/* 回调地址：长 URL 需要换行 */
+.hint.cb code {
+  word-break: break-all;
 }
 
 /* 弹层 */

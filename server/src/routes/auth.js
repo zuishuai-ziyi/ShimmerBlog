@@ -13,11 +13,11 @@ import {
   verifyCaptcha,
   captchaConfig,
 } from '../services/captcha.js';
-import { githubConfig, googleConfig, webOrigin, getSetting } from '../services/settings.js';
+import { getOAuthProviderBySlug, webOrigin, getSetting } from '../services/settings.js';
 import { notifyUser, getUserNotifyPrefs, setUserNotifyPrefs } from '../services/notify.js';
-import { oauthFetch } from '../services/oauth-fetch.js';
+import { providerAdapter, RESERVED_PROVIDER_SLUGS } from '../services/oauth.js';
 import { saveAvatarFromUrl, isAllowedAvatarHost } from '../services/avatar.js';
-import { signToken, publicUser, randomCode, makeLimiter } from '../utils.js';
+import { signToken, publicUser, randomCode, makeLimiter, getUserOAuthAccounts } from '../utils.js';
 import { avatarUpload } from '../uploads.js';
 
 export const authRouter = Router();
@@ -54,18 +54,52 @@ function notifyLogin(user, req) {
 }
 
 /**
- * OAuth 登录共用：按第三方 id 找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱）。
+ * OAuth 登录共用：按第三方绑定找老用户 → 按邮箱并档 → 都没有则新建（视为已验证邮箱）。
+ * 绑定关系存在 user_oauth_accounts 表（provider_slug + provider_user_id 唯一），不再用 users 表的旧列。
  * 头像：新建/并档后后台异步转存（不阻塞注册/登录主流程，失败仅日志不报错）；
  * 每次登录都会刷新 remote_avatar_url（第三方可能更新了头像地址，供之后手动同步用）。
  */
 async function localizeAvatar(userId, remoteUrl) {
-  const local = await saveAvatarFromUrl(remoteUrl);
+  const local = await saveAvatarFromUrl(remoteUrl, { source: 'oauth' });
   await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [local, userId]);
 }
 
-async function findOrCreateOAuthUser(providerCol, providerId, { email, name, avatar }) {
-  const [byPid] = await pool.query(`SELECT * FROM users WHERE \`${providerCol}\` = ? LIMIT 1`, [providerId]);
-  let user = byPid[0];
+/** 写绑定关系：同一用户同一 provider 只保留一条；已存在则更新第三方 id 与头像地址 */
+async function upsertOAuthBinding(userId, slug, providerUserId, avatar) {
+  const [existing] = await pool.query(
+    'SELECT id, provider_user_id FROM user_oauth_accounts WHERE user_id = ? AND provider_slug = ? LIMIT 1',
+    [userId, slug]
+  );
+  if (existing[0]) {
+    if (String(existing[0].provider_user_id) !== String(providerUserId)) {
+      await pool.query(
+        'UPDATE user_oauth_accounts SET provider_user_id = ?, avatar_url = COALESCE(?, avatar_url) WHERE id = ?',
+        [providerUserId, avatar || null, existing[0].id]
+      );
+    } else if (avatar) {
+      await pool.query('UPDATE user_oauth_accounts SET avatar_url = ? WHERE id = ?', [avatar, existing[0].id]);
+    }
+    return;
+  }
+  await pool.query(
+    'INSERT IGNORE INTO user_oauth_accounts (user_id, provider_slug, provider_user_id, avatar_url) VALUES (?, ?, ?, ?)',
+    [userId, slug, String(providerUserId), avatar || null]
+  );
+}
+
+/**
+ * OAuth 登录建号/并档：
+ * 1) 已绑定该第三方账号 → 直接登录；
+ * 2) 否则按邮箱并档（邮箱是否可信由适配器决定：google 只认已验证邮箱，github 取主邮箱/已验证邮箱）；
+ * 3) 再否则新建用户（视为已验证邮箱）并写入绑定关系。
+ */
+async function findOrCreateOAuthUser(slug, providerUserId, { email, name, avatar }) {
+  const [byBind] = await pool.query(
+    `SELECT u.* FROM user_oauth_accounts a JOIN users u ON u.id = a.user_id
+     WHERE a.provider_slug = ? AND a.provider_user_id = ? LIMIT 1`,
+    [slug, String(providerUserId)]
+  );
+  let user = byBind[0];
   let createdNew = false;
   if (!user && email) {
     const [byEmail] = await pool.query('SELECT * FROM users WHERE email = ? LIMIT 1', [email]);
@@ -73,7 +107,7 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
     if (user) {
       // 并档也记录第三方头像原始地址，便于之后手动「同步第三方头像」；
       // 若该用户还没有头像，后台异步转存第三方头像（已有自定义头像则不覆盖）
-      await pool.query(`UPDATE users SET \`${providerCol}\` = ?, remote_avatar_url = ? WHERE id = ?`, [providerId, avatar || null, user.id]);
+      await upsertOAuthBinding(user.id, slug, providerUserId, avatar);
       if (avatar && !user.avatar_url) {
         localizeAvatar(user.id, avatar).catch((e) =>
           console.error('[oauth-avatar] 并档头像后台转存失败（保留默认头像）:', String(e?.message || e))
@@ -85,12 +119,13 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
     const nick = String(name || '第三方用户').slice(0, 50);
     // 头像本地化不阻塞注册：先建号（暂用默认头像，记录原始地址），后台异步下载转存，成功后回填 avatar_url
     const [r] = await pool.query(
-      `INSERT INTO users (email, name, avatar_url, remote_avatar_url, \`${providerCol}\`, email_verified) VALUES (?, ?, ?, ?, ?, 1)`,
-      [email, nick, null, avatar || null, providerId]
+      'INSERT INTO users (email, name, avatar_url, remote_avatar_url, email_verified) VALUES (?, ?, ?, ?, 1)',
+      [email, nick, null, avatar || null]
     );
     const [created] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     user = created[0];
     createdNew = true;
+    await upsertOAuthBinding(user.id, slug, providerUserId, avatar);
     if (avatar) {
       localizeAvatar(user.id, avatar).catch((e) =>
         console.error('[oauth-avatar] 注册头像后台转存失败（保留默认头像）:', String(e?.message || e))
@@ -104,6 +139,12 @@ async function findOrCreateOAuthUser(providerCol, providerId, { email, name, ava
     user.remote_avatar_url = avatar;
   }
   return { user, createdNew };
+}
+
+/** 带第三方绑定信息的用户视图（publicUser + user_oauth_accounts） */
+async function publicUserView(u) {
+  if (!u) return null;
+  return publicUser(u, await getUserOAuthAccounts(u.id));
 }
 
 /* ---------- 注册（邮箱 + 密码） ----------
@@ -141,7 +182,7 @@ authRouter.post('/register', captchaOptionalGuard('register', (req) => req.body?
     );
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [r.insertId]);
     sendWelcomeEmail(rows[0]).catch(() => {}); // 欢迎邮件：异步发送，不阻塞注册
-    res.status(201).json({ token: signToken(rows[0]), user: await publicUser(rows[0]) });
+    res.status(201).json({ token: signToken(rows[0]), user: await publicUserView(rows[0]) });
   } catch (e) {
     next(e);
   }
@@ -165,7 +206,7 @@ authRouter.post('/login', loginLimiter, captchaGuard, async (req, res, next) => 
     if (!ok) return res.status(401).json({ error: '邮箱或密码错误' });
     if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
     notifyLogin(user, req); // 新登录提醒：异步发出，不阻塞登录
-    res.json({ token: signToken(user), user: await publicUser(user) });
+    res.json({ token: signToken(user), user: await publicUserView(user) });
   } catch (e) {
     next(e);
   }
@@ -286,7 +327,7 @@ authRouter.post('/login/code', captchaOptionalGuard('login', (req) => req.body?.
     }
     if (!user.email_verified) await pool.query('UPDATE users SET email_verified = 1 WHERE id = ?', [user.id]);
     notifyLogin(user, req); // 验证码登录提醒：异步发出，不阻塞登录
-    res.json({ token: signToken(user), user: await publicUser(user) });
+    res.json({ token: signToken(user), user: await publicUserView(user) });
   } catch (e) {
     next(e);
   }
@@ -330,10 +371,10 @@ authRouter.post('/reset-password', resetLimiter, async (req, res, next) => {
   }
 });
 
-/* ---------- GitHub OAuth ---------- */
-/* ---------- 第三方账号绑定（已登录用户主动绑定 GitHub/Google） ----------
- * 入口 /auth/bind/:provider（authRequired）：签发 bind 模式 state → 302 授权页；
- * 回调复用 /auth/:provider/callback，state.mode==='bind' 时只做绑定，不登录/并档/建号。 */
+/* ---------- 第三方登录（动态 provider：github / google / generic） ---------- */
+/* ---------- 第三方账号绑定（已登录用户主动绑定） ----------
+ * 入口 /auth/bind/:slug（authRequired）：签发 bind 模式 state → 302 授权页；
+ * 回调复用 /auth/:slug/callback，state.mode==='bind' 时只做绑定，不登录/并档/建号。 */
 /* 绑定失败原因只允许这三种稳定错误码，前端按码映射中文文案：
  *   gone=账号不存在或已注销，dup=该第三方账号已绑定其他本站账号，server=其他异常
  * 原始异常只写服务端日志，绝不进 URL（避免把内部报错信息暴露到前端）。 */
@@ -351,54 +392,61 @@ function wantsJson(req) {
   return String(req.get('accept') || '').includes('application/json');
 }
 
-async function startBind(provider, req, res) {
-  const cfg = provider === 'github' ? await githubConfig() : await googleConfig();
-  if (!cfg.clientId || !cfg.clientSecret) {
-    return res.status(501).json({ error: `${provider === 'github' ? 'GitHub' : 'Google'} OAuth 未配置，无法绑定` });
-  }
-  const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'bind', userId: req.user.id });
-  const url = new URL(
-    provider === 'github'
-      ? 'https://github.com/login/oauth/authorize'
-      : 'https://accounts.google.com/o/oauth2/v2/auth'
-  );
-  url.searchParams.set('client_id', cfg.clientId);
-  url.searchParams.set('redirect_uri', await oauthCallbackUri(provider));
-  if (provider === 'github') {
-    url.searchParams.set('scope', 'read:user user:email');
-  } else {
-    url.searchParams.set('response_type', 'code');
-    url.searchParams.set('scope', 'openid email profile');
-  }
-  url.searchParams.set('state', state);
-  // JSON 模式：前端用带 Authorization 头的 XHR 换取授权地址再整页跳转，
-  // 避免整页导航丢失 Bearer 令牌被 authRequired 判成未登录（401）
-  if (wantsJson(req)) return res.json({ url: url.toString() });
-  res.redirect(url.toString());
+/**
+ * 取 provider 行：不存在 / 已禁用 / 缺密钥 → usable 为 null；
+ * row 仍返回，用于给出「某某未配置」的错误文案。
+ */
+async function providerFor(slug) {
+  const row = await getOAuthProviderBySlug(slug);
+  const usable =
+    row && row.enabled && String(row.client_id ?? '').trim() && String(row.client_secret ?? '').trim()
+      ? row
+      : null;
+  return { row, usable };
 }
 
-authRouter.get('/bind/github', authRequired, (req, res, next) => {
-  startBind('github', req, res).catch(next);
-});
-authRouter.get('/bind/google', authRequired, (req, res, next) => {
-  startBind('google', req, res).catch(next);
-});
+/** 未配置时的展示名（provider 行优先，其次按 slug 猜） */
+function providerLabel(row, slug) {
+  return (
+    String(row?.name || '').trim() ||
+    (slug === 'github' ? 'GitHub' : slug === 'google' ? 'Google' : '第三方')
+  );
+}
 
-/* 绑定模式回调共用：把第三方 id 写到发起用户上（校验未被其他账号占用），不登录不建号 */
-async function finishBind(rec, providerCol, providerId, avatar, res) {
+async function startBind(slug, req, res) {
+  const { row, usable } = await providerFor(slug);
+  if (!usable) {
+    return res.status(501).json({ error: `${providerLabel(row, slug)} OAuth 未配置，无法绑定` });
+  }
+  const adapter = providerAdapter(usable);
+  const state = crypto.randomBytes(16).toString('hex');
+  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'bind', userId: req.user.id, slug });
+  const url = adapter.authorizeUrl({
+    clientId: usable.client_id,
+    redirectUri: await oauthCallbackUri(slug),
+    state,
+    scope: adapter.endpoints.scope,
+  });
+  // JSON 模式：前端用带 Authorization 头的 XHR 换取授权地址再整页跳转，
+  // 避免整页导航丢失 Bearer 令牌被 authRequired 判成未登录（401）
+  if (wantsJson(req)) return res.json({ url });
+  res.redirect(url);
+}
+
+/* 绑定模式回调共用：把第三方账号写到发起用户上（校验未被其他账号占用），不登录不建号 */
+async function finishBind(rec, slug, providerUserId, avatar, res) {
   const origin = await webOrigin();
   try {
     const [cur] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [rec.userId]);
     const u = cur[0];
     if (!u) return bindRedirect(res, origin, false, 'gone');
     const [dup] = await pool.query(
-      `SELECT id FROM users WHERE \`${providerCol}\` = ? AND id <> ? LIMIT 1`,
-      [providerId, rec.userId]
+      'SELECT id FROM user_oauth_accounts WHERE provider_slug = ? AND provider_user_id = ? AND user_id <> ? LIMIT 1',
+      [slug, providerUserId, rec.userId]
     );
     if (dup.length > 0) return bindRedirect(res, origin, false, 'dup');
-    await pool.query(`UPDATE users SET \`${providerCol}\` = ?, remote_avatar_url = ? WHERE id = ?`, [
-      providerId,
+    await upsertOAuthBinding(rec.userId, slug, providerUserId, avatar);
+    await pool.query('UPDATE users SET remote_avatar_url = ? WHERE id = ?', [
       avatar || u.remote_avatar_url || null,
       u.id,
     ]);
@@ -416,151 +464,9 @@ async function finishBind(rec, providerCol, providerId, avatar, res) {
   }
 }
 
-authRouter.get('/github', async (req, res) => {
-  const gh = await githubConfig();
-  const { clientId, clientSecret } = gh;
-  if (!clientId || !clientSecret) {
-    return res.status(501).json({
-      error: 'GitHub OAuth 未配置：请在后台「站点配置」填写，或设置 GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET',
-    });
-  }
-  const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'login' });
-  const url = new URL('https://github.com/login/oauth/authorize');
-  url.searchParams.set('client_id', clientId);
-  url.searchParams.set('redirect_uri', await oauthCallbackUri('github'));
-  url.searchParams.set('scope', 'read:user user:email');
-  url.searchParams.set('state', state);
-  res.redirect(url.toString());
-});
-
-authRouter.get('/github/callback', async (req, res) => {
-  const { code, state } = req.query;
-  const rec = typeof state === 'string' ? oauthStates.get(state) : undefined;
-  const expires = rec?.expires;
-  oauthStates.delete(String(state ?? ''));
-  if (typeof code !== 'string' || !expires || Date.now() > expires) {
-    return res.status(400).json({ error: 'GitHub 回调参数无效或 state 已过期' });
-  }
-  const gh = await githubConfig();
-  const { clientId, clientSecret } = gh;
-  if (!clientId || !clientSecret) return res.status(501).json({ error: 'GitHub OAuth 未配置' });
-  try {
-    const tokenRes = await oauthFetch('https://github.com/login/oauth/access_token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-      body: JSON.stringify({ client_id: clientId, client_secret: clientSecret, code, redirect_uri: await oauthCallbackUri('github') }),
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) {
-      return res.status(400).json({ error: 'GitHub 授权失败', detail: tokenData });
-    }
-    const headers = {
-      Authorization: `Bearer ${tokenData.access_token}`,
-      Accept: 'application/vnd.github+json',
-      'User-Agent': 'shimmerblog',
-    };
-    const ghUser = await (await oauthFetch('https://api.github.com/user', { headers })).json();
-    // 绑定模式：只把第三方 id 写到发起用户上，不登录/并档/建号（也省去拉邮箱）
-    if (rec?.mode === 'bind') {
-      return finishBind(rec, 'github_id', ghUser.id, ghUser.avatar_url || null, res);
-    }
-    const ghEmailsRes = await oauthFetch('https://api.github.com/user/emails', { headers });
-    const ghEmails = ghEmailsRes.ok ? await ghEmailsRes.json() : [];
-    const email = ghEmails.find((e) => e.primary && e.verified)?.email || ghUser.email || null;
-
-    const { user, createdNew } = await findOrCreateOAuthUser('github_id', ghUser.id, {
-      email: email ? String(email).toLowerCase() : null,
-      name: String(ghUser.name || ghUser.login || 'github 用户'),
-      avatar: ghUser.avatar_url,
-    });
-    if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
-    if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
-    notifyLogin(user, req); // 第三方登录提醒：异步发出，不阻塞跳转
-    const origin = await webOrigin();
-    res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
-  } catch (e) {
-    res.status(502).json({ error: 'GitHub OAuth 处理失败', detail: String(e) });
-  }
-});
-
-/* ---------- Google OAuth（OIDC） ---------- */
-authRouter.get('/google', async (req, res) => {
-  const g = await googleConfig();
-  if (!g.clientId || !g.clientSecret) {
-    return res.status(501).json({
-      error: 'Google 登录未配置：请在后台「第三方登录」填写 Client ID / Client Secret',
-    });
-  }
-  const state = crypto.randomBytes(16).toString('hex');
-  oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'login' });
-  const url = new URL('https://accounts.google.com/o/oauth2/v2/auth');
-  url.searchParams.set('client_id', g.clientId);
-  url.searchParams.set('redirect_uri', await oauthCallbackUri('google'));
-  url.searchParams.set('response_type', 'code');
-  url.searchParams.set('scope', 'openid email profile');
-  url.searchParams.set('state', state);
-  res.redirect(url.toString());
-});
-
-authRouter.get('/google/callback', async (req, res) => {
-  const { code, state } = req.query;
-  const rec = typeof state === 'string' ? oauthStates.get(state) : undefined;
-  const expires = rec?.expires;
-  oauthStates.delete(String(state ?? ''));
-  if (typeof code !== 'string' || !expires || Date.now() > expires) {
-    return res.status(400).json({ error: 'Google 回调参数无效或 state 已过期' });
-  }
-  const g = await googleConfig();
-  if (!g.clientId || !g.clientSecret) return res.status(501).json({ error: 'Google 登录未配置' });
-  try {
-    const tokenRes = await oauthFetch('https://oauth2.googleapis.com/token', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/x-www-form-urlencoded' },
-      body: new URLSearchParams({
-        code,
-        client_id: g.clientId,
-        client_secret: g.clientSecret,
-        redirect_uri: await oauthCallbackUri('google'),
-        grant_type: 'authorization_code',
-      }),
-    });
-    const tokenData = await tokenRes.json();
-    if (!tokenData.access_token) {
-      return res.status(400).json({ error: 'Google 授权失败', detail: tokenData });
-    }
-    const uiRes = await oauthFetch('https://openidconnect.googleapis.com/v1/userinfo', {
-      headers: { Authorization: `Bearer ${tokenData.access_token}` },
-    });
-    if (!uiRes.ok) {
-      return res.status(502).json({ error: '获取 Google 用户信息失败', detail: uiRes.status });
-    }
-    const ui = await uiRes.json();
-    // 只信任 Google 明确标注已验证的邮箱
-    const email = ui.email && ui.email_verified ? String(ui.email).toLowerCase() : null;
-    // 绑定模式：只把第三方 id 写到发起用户上，不登录/并档/建号
-    if (rec?.mode === 'bind') {
-      return finishBind(rec, 'google_id', String(ui.sub), ui.picture || null, res);
-    }
-
-    const { user, createdNew } = await findOrCreateOAuthUser('google_id', String(ui.sub), {
-      email,
-      name: String(ui.name || 'google 用户'),
-      avatar: ui.picture,
-    });
-    if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
-    if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
-    notifyLogin(user, req); // 第三方登录提醒：异步发出，不阻塞跳转
-    const origin = await webOrigin();
-    res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
-  } catch (e) {
-    res.status(502).json({ error: 'Google OAuth 处理失败', detail: String(e) });
-  }
-});
-
 /* ---------- 当前用户 / 资料 / 头像 ---------- */
 authRouter.get('/me', authRequired, async (req, res) => {
-  res.json({ user: await publicUser(req.user) });
+  res.json({ user: await publicUserView(req.user) });
 });
 
 /* ---------- 通知订阅设置（轻量开关，无需行为验证） ---------- */
@@ -641,7 +547,7 @@ authRouter.put('/profile', authRequired, async (req, res, next) => {
       ]);
     }
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    res.json({ user: await publicUser(rows[0]) });
+    res.json({ user: await publicUserView(rows[0]) });
   } catch (e) {
     next(e);
   }
@@ -687,7 +593,7 @@ authRouter.put('/password', authRequired, passwordChangeLimiter, async (req, res
     const hash = await bcrypt.hash(newPassword, 10);
     await pool.query('UPDATE users SET password_hash = ? WHERE id = ?', [hash, u.id]);
     const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
-    res.json({ user: await publicUser(fresh[0]), message: u.password_hash ? '密码已修改' : '密码已设置' });
+    res.json({ user: await publicUserView(fresh[0]), message: u.password_hash ? '密码已修改' : '密码已设置' });
   } catch (e) {
     next(e);
   }
@@ -695,20 +601,28 @@ authRouter.put('/password', authRequired, passwordChangeLimiter, async (req, res
 
 /* ---------- 解绑第三方账号 ----------
  * 解绑后必须仍保留至少一种登录方式（密码或另一第三方），避免把自己锁死。 */
-authRouter.delete('/oauth/:provider', authRequired, async (req, res, next) => {
+authRouter.delete('/oauth/:slug', authRequired, async (req, res, next) => {
   try {
-    const { provider } = req.params;
-    const col = provider === 'github' ? 'github_id' : provider === 'google' ? 'google_id' : null;
-    if (!col) return res.status(400).json({ error: '不支持的第三方类型' });
+    const slug = String(req.params.slug || '').trim().toLowerCase();
     const u = req.user;
-    if (!u[col]) return res.status(400).json({ error: '尚未绑定该第三方账号' });
-    const hasOther = u.password_hash || (provider === 'github' ? u.google_id : u.github_id);
+    // 绑定关系在 user_oauth_accounts 表（provider_slug + provider_user_id）
+    const [bind] = await pool.query(
+      'SELECT id FROM user_oauth_accounts WHERE user_id = ? AND provider_slug = ? LIMIT 1',
+      [u.id, slug]
+    );
+    if (!bind[0]) return res.status(400).json({ error: '尚未绑定该第三方账号' });
+    // 解绑后必须仍保留至少一种登录方式（密码或另一第三方），避免把自己锁死
+    const [others] = await pool.query(
+      'SELECT COUNT(*) AS c FROM user_oauth_accounts WHERE user_id = ? AND provider_slug <> ?',
+      [u.id, slug]
+    );
+    const hasOther = !!u.password_hash || Number(others[0]?.c || 0) > 0;
     if (!hasOther) {
       return res.status(400).json({ error: '解绑后将无法登录：请先设置密码，或保留至少一种第三方登录' });
     }
-    await pool.query(`UPDATE users SET \`${col}\` = NULL WHERE id = ?`, [u.id]);
+    await pool.query('DELETE FROM user_oauth_accounts WHERE id = ?', [bind[0].id]);
     const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
-    res.json({ user: await publicUser(fresh[0]), message: '已解绑' });
+    res.json({ user: await publicUserView(fresh[0]), message: '已解绑' });
   } catch (e) {
     next(e);
   }
@@ -721,7 +635,7 @@ authRouter.post('/avatar', authRequired, (req, res) => {
     const url = `/uploads/avatars/${req.file.filename}`;
     await pool.query('UPDATE users SET avatar_url = ? WHERE id = ?', [url, req.user.id]);
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ?', [req.user.id]);
-    res.json({ user: await publicUser(rows[0]), url });
+    res.json({ user: await publicUserView(rows[0]), url });
   });
 });
 
@@ -748,45 +662,163 @@ authRouter.post('/avatar/refresh-oauth', authRequired, async (req, res, next) =>
     }
     const [rows] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [req.user.id]);
     const u = rows[0];
-    if (!u || (!u.github_id && !u.google_id)) {
+    if (!u) return res.status(400).json({ error: '账号不可用' });
+    // 已绑定的第三方账号（绑定表是唯一数据源）
+    const [binds] = await pool.query(
+      'SELECT provider_slug, provider_user_id, avatar_url FROM user_oauth_accounts WHERE user_id = ? ORDER BY id ASC',
+      [u.id]
+    );
+    if (!binds.length) {
       return res.status(400).json({ error: '当前账号未绑定第三方登录，无法同步头像' });
     }
-    // 可选 body.provider：绑定了多个第三方时由前端让用户选择来源
-    const provider = String(req.body?.provider || '').toLowerCase();
-    if (provider && provider !== 'github' && provider !== 'google') {
-      return res.status(400).json({ error: 'provider 仅支持 github 或 google' });
+    // 可选 body.provider：指定只同步该 provider；不指定则同步全部已绑定的
+    const wanted = String(req.body?.provider || '').trim().toLowerCase();
+    const targets = wanted ? binds.filter((b) => String(b.provider_slug).toLowerCase() === wanted) : binds;
+    if (!targets.length) {
+      return res.status(400).json({ error: `该账号未绑定 ${wanted}，无法从其同步头像` });
     }
-    const useGithub = provider ? provider === 'github' : !!u.github_id;
-    if (useGithub && !u.github_id) {
-      return res.status(400).json({ error: '该账号未绑定 GitHub，无法从 GitHub 同步头像' });
-    }
-    if (!useGithub && !u.google_id) {
-      return res.status(400).json({ error: '该账号未绑定 Google，无法从 Google 同步头像' });
-    }
-    let url;
-    if (useGithub) {
-      // GitHub 头像可由用户 id 直接构造公开地址（公开可访问，无需重新授权）
-      url = `https://avatars.githubusercontent.com/u/${u.github_id}?size=460`;
-    } else {
-      // Google 头像地址不可从 id 推导：优先取登录时记录的原始地址；
-      // 老用户（记录功能上线前注册）若现有头像仍是第三方外链（白名单域名），直接回填当来源
-      url = u.remote_avatar_url;
-      if (!url && isAllowedAvatarUrl(u.avatar_url)) url = u.avatar_url;
-      if (!url) {
-        return res.status(400).json({ error: '缺少第三方头像来源，请重新登录该第三方账号后再试' });
+    let synced = null;
+    for (const b of targets) {
+      const slug = String(b.provider_slug).toLowerCase();
+      const { row } = await providerFor(slug);
+      const type = row?.type || (slug === 'github' ? 'github' : slug === 'google' ? 'google' : 'generic');
+      let url = '';
+      let fromProvider = false; // 只有 provider 给的地址才走 OAuth 域名豁免
+      if (type === 'github') {
+        // GitHub 头像可由用户 id 直接构造公开地址（公开可访问，无需重新授权）
+        url = `https://avatars.githubusercontent.com/u/${b.provider_user_id}?size=460`;
+        fromProvider = true;
+      } else if (b.avatar_url) {
+        url = b.avatar_url; // 绑定/登录时记录的 provider 头像地址
+        fromProvider = true;
+      } else if (u.remote_avatar_url) {
+        url = u.remote_avatar_url; // 登录时记录的原始地址
+        fromProvider = true;
+      } else if (isAllowedAvatarUrl(u.avatar_url)) {
+        // 老用户（记录功能上线前注册）：现有头像仍是第三方外链（白名单域名），直接回填当来源
+        url = u.avatar_url;
       }
+      if (!url) continue;
+      let local;
+      try {
+        local = await saveAvatarFromUrl(url, { source: fromProvider ? 'oauth' : 'user' });
+      } catch (e) {
+        console.error('[oauth-avatar] 手动同步头像失败:', String(e?.message || e));
+        continue;
+      }
+      await pool.query('UPDATE users SET avatar_url = ?, remote_avatar_url = ? WHERE id = ?', [local, url, u.id]);
+      await pool.query('UPDATE user_oauth_accounts SET avatar_url = ? WHERE user_id = ? AND provider_slug = ?', [
+        url,
+        u.id,
+        b.provider_slug,
+      ]);
+      if (!synced) synced = { slug, local };
     }
-    let local;
-    try {
-      local = await saveAvatarFromUrl(url);
-    } catch (e) {
-      console.error('[oauth-avatar] 手动同步头像失败:', String(e?.message || e));
+    if (!synced) {
       return res.status(502).json({ error: '获取第三方头像失败，请稍后再试' });
     }
-    await pool.query('UPDATE users SET avatar_url = ?, remote_avatar_url = ? WHERE id = ?', [local, url, u.id]);
     avatarRefreshAt.set(u.id, Date.now());
     const [fresh] = await pool.query('SELECT * FROM users WHERE id = ? LIMIT 1', [u.id]);
-    res.json({ user: await publicUser(fresh[0]), url: local, provider: useGithub ? 'github' : 'google' });
+    res.json({ user: await publicUserView(fresh[0]), url: synced.local, provider: synced.slug });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* ---------- 动态第三方登录路由（必须放在文件末尾，避免遮蔽上面的既有路径） ----------
+ * GET /bind/:slug      → 登录态下绑定第三方账号（动态版本）
+ * GET /:slug/callback  → 第三方回调（登录与绑定共用，state.mode 区分）
+ * GET /:slug           → 发起第三方登录（302 授权页；?json=1 时返回授权地址）
+ * slug 命中保留字（既有 auth 路径 / 通用词）时直接交给后续处理（最终 404）。
+ */
+
+/** 绑定第三方账号入口（登录态）：签发 bind 模式 state → 授权页 */
+authRouter.get('/bind/:slug', authRequired, (req, res, next) => {
+  const slug = String(req.params.slug || '').trim().toLowerCase();
+  if (RESERVED_PROVIDER_SLUGS.has(slug)) return next();
+  startBind(slug, req, res).catch(next);
+});
+
+/** 第三方回调：登录与绑定共用（state.mode 区分 bind / login） */
+authRouter.get('/:slug/callback', async (req, res, next) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    if (RESERVED_PROVIDER_SLUGS.has(slug)) return next();
+    const { code, state } = req.query;
+    const rec = typeof state === 'string' ? oauthStates.get(state) : undefined;
+    const expires = rec?.expires;
+    oauthStates.delete(String(state ?? ''));
+    if (typeof code !== 'string' || !expires || Date.now() > expires) {
+      return res.status(400).json({ error: '回调参数无效或 state 已过期' });
+    }
+    // state 里记了发起时的 provider slug，回调 slug 必须一致（防止跨 provider 复用 state）
+    if (rec?.slug && rec.slug !== slug) {
+      return res.status(400).json({ error: '回调参数无效或 state 已过期' });
+    }
+    const { row, usable } = await providerFor(slug);
+    if (!usable) {
+      return res.status(501).json({ error: `${providerLabel(row, slug)} 登录未配置` });
+    }
+    const adapter = providerAdapter(usable);
+    try {
+      const token = await adapter.exchangeCode({
+        code,
+        clientId: usable.client_id,
+        clientSecret: usable.client_secret,
+        redirectUri: await oauthCallbackUri(slug),
+      });
+      const accessToken = token?.access_token;
+      if (!accessToken) return res.status(400).json({ error: '授权失败' });
+      // 绑定模式：只把第三方账号写到发起用户上，不登录/并档/建号（也省去拉邮箱）
+      const isBind = rec?.mode === 'bind';
+      const info = await adapter.fetchUserInfo(accessToken, { needEmail: !isBind });
+      if (!info.providerUserId) {
+        return res.status(400).json({ error: '第三方未返回用户标识' });
+      }
+      if (isBind) {
+        return finishBind(rec, slug, info.providerUserId, info.avatar || null, res);
+      }
+      const { user, createdNew } = await findOrCreateOAuthUser(slug, info.providerUserId, {
+        email: info.email || null,
+        name: info.name,
+        avatar: info.avatar || null,
+      });
+      if (user.status !== 'active') return res.status(403).json({ error: '账号已被禁用' });
+      if (createdNew && user.email) sendWelcomeEmail(user).catch(() => {});
+      notifyLogin(user, req); // 第三方登录提醒：异步发出，不阻塞跳转
+      const origin = await webOrigin();
+      res.redirect(`${origin}/auth/callback?token=${signToken(user)}`);
+    } catch (e) {
+      console.error('[oauth] 第三方回调处理失败:', e);
+      res.status(502).json({ error: `${providerLabel(usable, slug)} OAuth 处理失败`, detail: String(e) });
+    }
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** 发起第三方登录 */
+authRouter.get('/:slug', async (req, res, next) => {
+  try {
+    const slug = String(req.params.slug || '').trim().toLowerCase();
+    if (RESERVED_PROVIDER_SLUGS.has(slug)) return next();
+    const { row, usable } = await providerFor(slug);
+    if (!usable) {
+      return res.status(501).json({
+        error: `${providerLabel(row, slug)} 登录未配置：请在后台「第三方登录」填写 Client ID / Client Secret`,
+      });
+    }
+    const adapter = providerAdapter(usable);
+    const state = crypto.randomBytes(16).toString('hex');
+    oauthStates.set(state, { expires: Date.now() + 10 * 60 * 1000, mode: 'login', slug });
+    const url = adapter.authorizeUrl({
+      clientId: usable.client_id,
+      redirectUri: await oauthCallbackUri(slug),
+      state,
+      scope: adapter.endpoints.scope,
+    });
+    if (wantsJson(req)) return res.json({ url });
+    res.redirect(url);
   } catch (e) {
     next(e);
   }

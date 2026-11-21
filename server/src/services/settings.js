@@ -138,10 +138,8 @@ const DEFAULTS = {
   smtp_user: '',
   smtp_pass: '',
   smtp_from: '',
-  github_client_id: '',
-  github_client_secret: '',
-  google_client_id: '',
-  google_client_secret: '',
+  // 注：旧的 github_client_id / github_client_secret / google_client_id / google_client_secret
+  // 已迁移到 oauth_providers 表（见 db.js 的 migrateOAuthProviders），不再作为站点设置读写。
   oauth_proxy_url: '',
   web_origin: 'http://localhost:5180',
   register_open: '1',
@@ -217,18 +215,174 @@ export async function setSettings(patch) {
   return { updated: entries.length };
 }
 
-/** GitHub OAuth 生效配置：后台配置优先，其次环境变量 */
-export async function githubConfig() {
-  const id = (await getSetting('github_client_id')) || config.github.clientId;
-  const secret = (await getSetting('github_client_secret')) || config.github.clientSecret;
-  return { clientId: id, clientSecret: secret, enabled: !!(id && secret) };
+/* ---------- SSO provider（oauth_providers 表） ---------- */
+
+/** 内置 OAuth 端点预设：按 type 取默认授权 / 令牌 / 用户信息地址与 scope（行内 URL、scope 为空时回落） */
+export const OAUTH_PRESETS = {
+  github: {
+    authorize_url: 'https://github.com/login/oauth/authorize',
+    token_url: 'https://github.com/login/oauth/access_token',
+    userinfo_url: 'https://api.github.com/user',
+    scope: 'read:user user:email',
+  },
+  google: {
+    authorize_url: 'https://accounts.google.com/o/oauth2/v2/auth',
+    token_url: 'https://oauth2.googleapis.com/token',
+    userinfo_url: 'https://openidconnect.googleapis.com/v1/userinfo',
+    scope: 'openid email profile',
+  },
+  generic: {
+    authorize_url: '',
+    token_url: '',
+    userinfo_url: '',
+    scope: '',
+  },
+};
+
+/** oauth_providers 的 type 枚举（与建表 ENUM 一致） */
+const PROVIDER_TYPES = ['github', 'google', 'generic'];
+
+/** oauth_providers 可写字段白名单（防注入未知列） */
+const PROVIDER_FIELDS = [
+  'slug',
+  'name',
+  'type',
+  'client_id',
+  'client_secret',
+  'authorize_url',
+  'token_url',
+  'userinfo_url',
+  'scope',
+  'enabled',
+  'sort_order',
+];
+
+/**
+ * 解析 provider 生效的端点：行内自定义值为空时回落到 type 对应预设，否则用自定义值。
+ * 入参可以是数据库行或普通对象；返回 { authorize_url, token_url, userinfo_url, scope }。
+ */
+export function resolveProviderEndpoints(row) {
+  const preset = OAUTH_PRESETS[row?.type] || OAUTH_PRESETS.generic;
+  const pick = (value, key) => {
+    const v = String(value ?? '').trim();
+    return v || (preset[key] || '');
+  };
+  return {
+    authorize_url: pick(row?.authorize_url, 'authorize_url'),
+    token_url: pick(row?.token_url, 'token_url'),
+    userinfo_url: pick(row?.userinfo_url, 'userinfo_url'),
+    scope: pick(row?.scope, 'scope'),
+  };
 }
 
-/** Google OAuth 生效配置：后台配置优先，其次环境变量 */
-export async function googleConfig() {
-  const id = (await getSetting('google_client_id')) || config.google.clientId;
-  const secret = (await getSetting('google_client_secret')) || config.google.clientSecret;
-  return { clientId: id, clientSecret: secret, enabled: !!(id && secret) };
+/** enabled 字段归一化：true / 1 / '1' / 'true' → 1，其余 → 0 */
+function toEnabledFlag(value) {
+  if (value === true || value === 1) return 1;
+  if (typeof value === 'string') {
+    return ['1', 'true', 'yes', 'on'].includes(value.trim().toLowerCase()) ? 1 : 0;
+  }
+  return value ? 1 : 0;
+}
+
+/** 只保留白名单字段并做基本类型归一（字符串 / enabled 0-1 / sort_order 整数 / type 枚举） */
+function pickProviderFields(data = {}) {
+  const out = {};
+  for (const f of PROVIDER_FIELDS) {
+    if (!Object.prototype.hasOwnProperty.call(data, f)) continue;
+    const v = data[f];
+    if (v === undefined) continue;
+    if (f === 'enabled') {
+      out[f] = toEnabledFlag(v);
+      continue;
+    }
+    if (f === 'sort_order') {
+      const n = Number.parseInt(v, 10);
+      out[f] = Number.isFinite(n) ? n : 0;
+      continue;
+    }
+    if (f === 'type') {
+      const t = String(v ?? '').trim().toLowerCase();
+      out[f] = PROVIDER_TYPES.includes(t) ? t : 'generic';
+      continue;
+    }
+    out[f] = String(v ?? '');
+  }
+  return out;
+}
+
+/** provider 列表：默认只返回 enabled=1 的，按 sort_order、id 排序 */
+export async function listOAuthProviders(includeDisabled = false) {
+  const sql = includeDisabled
+    ? 'SELECT * FROM oauth_providers ORDER BY sort_order ASC, id ASC'
+    : 'SELECT * FROM oauth_providers WHERE enabled = 1 ORDER BY sort_order ASC, id ASC';
+  const [rows] = await pool.query(sql);
+  return rows;
+}
+
+/** 按 slug 取 provider（含 disabled 的行）；没有则返回 null */
+export async function getOAuthProviderBySlug(slug) {
+  const [rows] = await pool.query('SELECT * FROM oauth_providers WHERE slug = ? LIMIT 1', [slug]);
+  return rows[0] ?? null;
+}
+
+/** 按 id 取 provider（含 disabled 的行）；没有则返回 null */
+export async function getOAuthProviderById(id) {
+  const [rows] = await pool.query('SELECT * FROM oauth_providers WHERE id = ? LIMIT 1', [id]);
+  return rows[0] ?? null;
+}
+
+/** 新建 provider：data 字段即表字段，只写入白名单列；返回新建后的行 */
+export async function createOAuthProvider(data = {}) {
+  const clean = pickProviderFields(data);
+  const slug = String(clean.slug ?? '').trim();
+  const name = String(clean.name ?? '').trim();
+  if (!slug) throw new Error('provider slug 不能为空');
+  if (!name) throw new Error('provider name 不能为空');
+  const cols = ['slug', 'name', 'type'];
+  const vals = [slug, name, clean.type || 'generic'];
+  for (const f of PROVIDER_FIELDS) {
+    if (f === 'slug' || f === 'name' || f === 'type') continue;
+    if (!(f in clean)) continue;
+    cols.push(f);
+    vals.push(clean[f]);
+  }
+  const [res] = await pool.query(
+    `INSERT INTO oauth_providers (${cols.join(', ')}) VALUES (${cols.map(() => '?').join(', ')})`,
+    vals
+  );
+  return getOAuthProviderById(res.insertId);
+}
+
+/**
+ * 更新 provider（按 id）：patch 只取白名单列；改 slug 时同步改绑定表里的 provider_slug。
+ * 返回更新后的行；id 不存在时返回 null。
+ */
+export async function updateOAuthProvider(id, patch = {}) {
+  const clean = pickProviderFields(patch);
+  const cols = Object.keys(clean);
+  if (cols.length === 0) return getOAuthProviderById(id);
+  const before = clean.slug ? await getOAuthProviderById(id) : null;
+  const sets = cols.map((c) => `${c} = ?`).join(', ');
+  const vals = cols.map((c) => clean[c]);
+  vals.push(id);
+  await pool.query(`UPDATE oauth_providers SET ${sets} WHERE id = ?`, vals);
+  if (before && before.slug && before.slug !== clean.slug) {
+    // slug 是绑定表的关联键，改名时同步，避免绑定落到不存在的 provider 上
+    await pool.query('UPDATE user_oauth_accounts SET provider_slug = ? WHERE provider_slug = ?', [
+      clean.slug,
+      before.slug,
+    ]);
+  }
+  return getOAuthProviderById(id);
+}
+
+/** 删除 provider：同时清掉该 provider 名下的用户绑定；返回是否删到了行 */
+export async function deleteOAuthProvider(id) {
+  const row = await getOAuthProviderById(id);
+  if (!row) return false;
+  await pool.query('DELETE FROM user_oauth_accounts WHERE provider_slug = ?', [row.slug]);
+  await pool.query('DELETE FROM oauth_providers WHERE id = ?', [id]);
+  return true;
 }
 
 /** 默认用户名颜色：用户未自定义 name_color 时前端显示的颜色（后台「用户管理」可改；空值回退 #8cc6e2） */
@@ -421,8 +575,13 @@ export async function mailTemplate(kind, vars = {}) {
 /** 对外公开的站点信息（不含密钥） */
 export async function publicSiteInfo() {
   const all = await getAllSettings();
-  const gh = await githubConfig();
-  const gg = await googleConfig();
+  // 已启用的 provider（按 sort_order、id 排序）：只下发 slug / name / type，不含任何密钥
+  const providers = await listOAuthProviders(false);
+  // 真正可用的（enabled + client_id + client_secret 齐全）才对外暴露入口，避免按钮点了报 501
+  const usable = providers.filter(
+    (p) => p.enabled && String(p.client_id ?? '').trim() && String(p.client_secret ?? '').trim()
+  );
+  const enabledSlugs = new Set(usable.map((p) => p.slug));
   const title = all.site_title;
   return {
     title,
@@ -433,8 +592,11 @@ export async function publicSiteInfo() {
     aboutHtml: all.about_html || '',
     aboutSubtitle: all.about_subtitle || '一个会发光的角落',
     registerOpen: all.register_open === '1',
-    githubEnabled: gh.enabled,
-    googleEnabled: gg.enabled,
+    // github / google 是否可用：从 oauth_providers 表推导（该 slug 存在、enabled=1 且密钥齐全）
+    githubEnabled: enabledSlugs.has('github'),
+    googleEnabled: enabledSlugs.has('google'),
+    // 可用的第三方登录入口（前端按此渲染登录按钮）
+    oauthProviders: usable.map((p) => ({ slug: p.slug, name: p.name, type: p.type })),
     captchaEnabled: captchaEnabledOf(all),
     captchaProvider: captchaProviderOf(all),
     captchaApi: all.captcha_api || '',

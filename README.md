@@ -68,7 +68,7 @@ cd ../web && npm run dev
    `DB_PASSWORD='p@ss#word$1'`
 2. `JWT_SECRET` 务必改成足够长的随机串。
 
-``.env` 关键项见 `server/.env.example`：`PORT`、`JWT_SECRET`、`DB_*`、`ADMIN_PASSWORD`（管理后台密码，首次启动建库时写入哈希；不设管理员邮箱，无管理员用户）、`GITHUB_CLIENT_ID/SECRET`（可留空，后台填）、`SMTP_*`（可留空）。
+``.env` 关键项见 `server/.env.example`：`PORT`、`JWT_SECRET`、`DB_*`、`ADMIN_PASSWORD`（管理后台密码，首次启动建库时写入哈希；不设管理员邮箱，无管理员用户）、`GITHUB_CLIENT_ID/SECRET`（第三方登录环境变量，仍受支持：首次启动时自动迁移为一条 `github` 登录方式（一次性）；运行时改到后台「SSO 登录」页管理）、`SMTP_*`（可留空）。
 
 ## 站点配置（可在后台改，不必改 .env）
 
@@ -79,20 +79,19 @@ cd ../web && npm run dev
 | `site_title` / `site_subtitle` | 顶栏标题、首页副标题与浏览器标题 |
 | `site_description` | 站点描述（关于页/SEO 用） |
 | `register_open` | 关闭后 `/api/auth/register` 返回 403，登录页隐藏注册 tab |
-| `github_client_id` / `github_client_secret` | 填好即启用 GitHub 登录；留空/清空即关闭 |
-| `google_client_id` / `google_client_secret` | 填好即启用 Google 登录；留空/清空即关闭 |
+| （第三方登录） | GitHub / Google / 其他 OAuth2 方式**不再**放在站点设置里，改由后台「SSO 登录」页管理（存 `oauth_providers` 表）；`.env` 里的 `GITHUB_CLIENT_ID/SECRET`、`GOOGLE_CLIENT_ID/SECRET` 仍受支持，首次启动时自动迁移为对应登录方式（一次性，迁移后不再重复导入） |
 | `oauth_proxy_url` | 可选。服务器侧访问 GitHub/Google API 走的 HTTP(S) 代理（如 `http://127.0.0.1:7890`），供国内服务器使用第三方登录；留空直连 |
-| `avatar_redirect_hops` / `avatar_timeout_seconds` | 第三方头像下载限制：重定向跟随上限（0–12 跳，默认 12）与总超时（1–300 秒，默认 60），后台「第三方登录」页可改 |
+| `avatar_redirect_hops` / `avatar_timeout_seconds` | 第三方头像下载限制：重定向跟随上限（0–12 跳，默认 12）与总超时（1–300 秒，默认 60），后台「SSO 登录」页可改 |
 | `default_name_color` | 默认用户名颜色：用户未自定义名称颜色时全站显示的颜色（后台「用户管理」页可改）；内置默认 `#8cc6e2`（前台强调色 --accent） |
 | `captcha_enabled` / `captcha_provider` | 行为验证码开关与服务类型：`captcha_provider` = `gocaptcha`（点选，默认）/ `tianai`（天爱滑块，自建 [tianai-captcha](https://github.com/dromara/tianai-captcha) 服务）/ `recaptcha`（Google reCAPTCHA v2 勾选框，后台可切换） |
 | `captcha_api` / `captcha_id` / `captcha_verify_api` | GoCaptcha：`captcha_api` 为 go-captcha-service 公开地址（前端取题用，如 `https://go-captcha.xiaoziyi.com`）；`captcha_id` 取题实例（默认 `click-default-ch`）；`captcha_verify_api` 可选，后端二次校验地址（留空用服务地址；同机部署可填内网 `http://127.0.0.1:9700` 免依赖公网证书）。tianai 复用 `captcha_api`（服务公开地址如 `https://tianai-captcha.xiaoziyi.com`）与 `captcha_verify_api`（可选二次验证地址，留空用服务地址；同机可填内网 `http://127.0.0.1:21001`）；`captcha_id` 不用 |
 | `recaptcha_site_key` / `recaptcha_secret_key` / `recaptcha_verify_api` | reCAPTCHA v2：`site_key` 前端渲染勾选框；`secret_key` 后端 siteverify 用（后台掩码保存）；`recaptcha_verify_api` 可选校验地址（默认官方国内镜像 `https://recaptcha.net/recaptcha/api/siteverify`，大陆可达） |
-| `web_origin` | 第三方登录回调后跳回的前端地址（生产环境改成你的域名） |
+| `web_origin` | 站点地址（第三方登录回调后跳回的前端地址，生产环境改成你的域名）；也用于拼 SSO 回调地址 `{web_origin}/api/auth/{slug}/callback` |
 
 - 后台存的值优先于 `.env`；密钥字段读接口只返回掩码（`__KEEP__` 表示保持原值，`__CLEAR__` 表示清空）。
 - **关于页副标题**：后台「站点」页可自定义关于页标题下方的副标题（`about_subtitle`）；留空时使用内置默认「一个会发光的角落」。
 - **站点 Logo / 用户默认头像**：后台「站点」页上传（`POST/DELETE /api/admin/logo`、`POST/DELETE /api/admin/default-avatar`）。默认头像对所有无头像用户生效（文章卡/文章页/顶栏/控制台/空间页统一回退到 `GET /api/site` 的 `defaultAvatarUrl`）；未设置时使用内置 `web/src/assets/default-avatar.svg`。
-- **第三方登录（后台「第三方登录」页）**：GitHub / Google 各填一对 Client ID / Secret 即启用（登录页自动出现对应按钮），清空即关闭。后台会直接展示当前环境的回调地址。
+- **第三方登录（后台「SSO 登录」页）**：每种登录方式（GitHub / Google / 任意 OAuth2）单独一条记录，填好 Client ID / Secret 并启用后，登录页自动出现对应按钮（按排序值先后展示）；停用只是隐藏入口、用户绑定保留；删除会级联解绑。后台会直接展示当前环境的回调地址。详见下文「SSO/第三方登录管理」。
   - GitHub：GitHub → Settings → Developer settings → OAuth Apps，Authorization callback URL 填 `https://你的域名/api/auth/github/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/github/callback`）。
   - Google：Google Cloud 控制台 → API 和服务 → 凭据，创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填 `https://你的域名/api/auth/google/callback`（本地联调填 `http://127.0.0.1:3010/api/auth/google/callback`）。注意 Google 对未验证应用默认只允许「测试用户」登录。
   - 回调后按第三方 id 找用户 → 否则按已验证邮箱并档 → 否则建新号（视为已验证邮箱），随后带 token 跳回 `web_origin/auth/callback`。
@@ -113,29 +112,49 @@ cd ../web && npm run dev
   - **风控验证**：修改资料（昵称/简介）10 分钟窗口内前 2 次免验证，超出频率要求完成验证码（带码直接验证通过）；携带验证码的请求必须验证通过，失败不影响信用。
   - **弹窗体验**：原生 `<dialog>.showModal()`（打开时焦点困在弹窗内、背景不可 Tab/交互、页面滚动锁定、点击遮罩不关闭）；验证未通过/失效时弹窗内下方小字提示并自动换题，无需重试整个操作；业务错误（如密码错误）关闭弹窗由表单层展示。错误响应带 `code`（`CAPTCHA_REQUIRED` / `CAPTCHA_FAILED` / `CAPTCHA_UNAVAILABLE`）供前端区分处理。
 
+## SSO/第三方登录管理
+
+第三方登录方式统一存 `oauth_providers` 表，在后台「SSO 登录」页增删改，不再用站点设置里的 `github_client_id` / `github_client_secret` / `google_client_id` / `google_client_secret` 四个键。
+
+| 字段 | 说明 |
+| --- | --- |
+| `slug` | 登录方式标识（小写字母/数字/`_`/`-`，≤50 字符；保留字如 `login`/`bind`/`oauth` 不可用，`github`/`google` 可用）。决定路由 `/api/auth/:slug` 与回调地址；改 slug 不会丢用户绑定 |
+| `name` | 登录页展示的名称（≤100 字符） |
+| `type` | `github` / `google` / `generic`：前两者端点留空时用内置预设；`generic` 必须自行填三个端点 |
+| `client_id` / `client_secret` | 第三方应用凭据；密钥只写不读（接口返回 `__KEEP__` 表示已设置，另给 `secret_set`） |
+| `authorize_url` / `token_url` / `userinfo_url` / `scope` | 授权 / 令牌 / 用户信息端点（须 `https://`）与授权范围（`scope` ≤200） |
+| `enabled` | 是否启用（停用后登录页不再出现入口，用户绑定保留） |
+| `sort_order` | 展示顺序（越小越靠前） |
+
+- **回调地址**：固定为 `{站点地址}/api/auth/{slug}/callback`（站点地址取 `web_origin`，不依赖请求头）；后台编辑框里直接给出可复制的完整地址，填到第三方应用的回调地址 / redirect URI。
+- **内置预设**：`github` → `https://github.com/login/oauth/authorize`、`https://github.com/login/oauth/access_token`、`https://api.github.com/user`（scope `read:user user:email`）；`google` → `https://accounts.google.com/o/oauth2/v2/auth`、`https://oauth2.googleapis.com/token`、`https://openidconnect.googleapis.com/v1/userinfo`（scope `openid email profile`）。
+- **用户绑定**：绑定关系存 `user_oauth_accounts`（`user_id` + `provider_slug` + `provider_user_id` + 第三方头像地址），一个用户可同时绑定多个登录方式；绑定 / 解绑接口为 `GET /api/auth/bind/:slug` 与 `DELETE /api/auth/oauth/:slug`。
+- **删除即解绑**：删除某种登录方式会级联删除该方式的所有用户绑定（`DELETE /api/admin/oauth-providers/:id`），不可恢复。
+- **旧配置迁移**：首次启动时把 `.env` / 旧站点设置里的 `GITHUB_CLIENT_ID/SECRET`、`GOOGLE_CLIENT_ID/SECRET` 自动迁移成 `github` / `google` 两条 provider（`client_id` 与 `client_secret` 齐全才启用），`users.github_id` / `users.google_id` 的历史绑定回填到 `user_oauth_accounts`；迁移后站点设置不再读写那四个键。
+
 ## API 概览
 
 | 方法 & 路径 | 说明 |
 | --- | --- |
 | `GET /api/health` | 健康检查（含数据库连通性） |
-| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/GitHub 与 Google 是否可用/行为验证码配置与类型/关于页副标题 aboutSubtitle） |
+| `GET /api/site` | 公开站点信息（标题/副标题/是否开放注册/已启用的第三方登录方式 `oauthProviders`（slug+名称+类型）与 GitHub、Google 是否可用/行为验证码配置与类型/关于页副标题 aboutSubtitle） |
 | `POST /api/auth/register` | 邮箱 + 密码 + **邮箱验证码**注册（验证码校验通过即视为邮箱已验证） |
 | `POST /api/auth/login` | 密码登录（15 分钟 10 次限流） |
 | `POST /api/auth/send-code` | 发送 6 位邮箱验证码（10 分钟有效、一次性；`purpose`：`login` / `register` / `reset` / `change-password`——`register` 要求邮箱未被占用，`reset` 仅向已注册邮箱发送，`change-password` 需登录态且邮箱与当前账号一致，挂行为验证码；未登录 401「未登录」，邮箱与当前账号不符 403「邮箱与当前账号不匹配」） |
 | `POST /api/auth/login/code` | 验证码登录（邮箱不存在则自动注册） |
 | `POST /api/auth/reset-password` | 忘记密码：邮箱验证码重置密码（每小时 10 次限流） |
-| `GET /api/auth/github` · `/api/auth/github/callback` | GitHub OAuth（未配置返回 501） |
-| `GET /api/auth/google` · `/api/auth/google/callback` | Google OAuth（OIDC，未配置返回 501） |
-| `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` · `POST /api/auth/avatar/refresh-oauth` | 当前用户 / 改名 / 换头像 / 从第三方同步头像（绑定过 GitHub/Google 才可用，`body.provider` 可指定来源，60s 限频） |
+| `GET /api/auth/:slug` · `/api/auth/:slug/callback` | 第三方 OAuth 授权跳转 / 回调（`:slug` 为后台「SSO 登录」页配置的登录方式标识，如 `github` / `google` / `gitee`；该方式未配置或未启用返回 501） |
+| `GET /api/auth/me` · `PUT /api/auth/profile` · `POST /api/auth/avatar` · `POST /api/auth/avatar/refresh-oauth` | 当前用户 / 改名 / 换头像 / 从第三方同步头像（绑定过 GitHub/Google/其他 OAuth2 才可用，`body.provider` 可指定来源，60s 限频） |
 | `PUT /api/auth/password` | 修改/设置密码（15 分钟 5 次；已设密码可验 `currentPassword`，或带邮箱验证码 `code` 免验当前密码（第三方用户首设免验）；带 `code` 时忽略 `currentPassword`：账号未绑定邮箱 400「当前账号未绑定邮箱」，验证码错误/已过期 401「验证码错误或已过期」；`newPassword` 6–100 位，返回 `{ user, message }`） |
-| `GET /api/auth/bind/:provider` · `DELETE /api/auth/oauth/:provider` | 绑定第三方（登录态 302 到授权页，回调仅绑定不登录）/ 解绑（解绑后须仍保留密码或另一第三方可登录） |
+| `GET /api/auth/bind/:slug` · `DELETE /api/auth/oauth/:slug` | 绑定第三方（登录态 302 到授权页，回调仅绑定不登录）/ 解绑（解绑后须仍保留密码或另一第三方可登录）；`:slug` 同上 |
 | `GET /api/articles` | 公开文章列表（分页，置顶优先，按发布时间倒序） |
 | `GET /api/articles/:id` | 文章详情（草稿仅作者或管理员可见） |
 | `GET /api/articles/mine` | 我的文章（含草稿） |
 | `POST /api/articles` · `PUT /api/articles/:id` · `DELETE /api/articles/:id` | 发布 / 编辑 / 删除（作者或管理员） || `POST /api/articles/:id/pin` | 置顶 / 取消置顶（管理员） |
 | `POST /api/articles/upload-image` | 正文插图上传 |
 | `GET /api/admin/users` · `PATCH /api/admin/users/:id` · `DELETE /api/admin/users/:id` | 用户列表 / 禁用启用・权限・名字颜色・改名・改绑邮箱・重置密码 / 删除用户（彻底删除：该用户所有信息清除，文章经外键级联删除，原邮箱可重新注册） |
-| `GET /api/admin/settings` · `PUT /api/admin/settings` | 站点配置读写（含邮件模板与默认值元数据，管理员） |
+| `GET /api/admin/settings` · `PUT /api/admin/settings` | 站点配置读写（含邮件模板与默认值元数据，管理员；第三方登录四个键已迁出，不再读写） |
+| `GET /api/admin/oauth-providers` · `POST /api/admin/oauth-providers` · `PUT /api/admin/oauth-providers/:id` · `DELETE /api/admin/oauth-providers/:id` | SSO 登录方式增删改查（`oauth_providers` 表，管理员）：列表含停用项，按 `sort_order`、id 排序；`client_secret` 只返回 `__KEEP__`（已设置）/ `''`（未设置）并另给 `secret_set`；写入时 `__KEEP__`/缺省=不改、`__CLEAR__`=清空；校验失败 400 `{error,message}`、slug 重复 409；删除会级联解绑该方式的所有用户绑定 |
 
 ## 界面实现要点
 

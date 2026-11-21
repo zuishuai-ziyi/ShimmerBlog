@@ -26,14 +26,14 @@
           <li><strong>前端</strong>：Vue 3 + TypeScript + Vite，Pinia 状态管理，Vue Router 路由</li>
           <li><strong>后端</strong>：Node.js + Express 5，JWT 鉴权</li>
           <li><strong>数据</strong>：MySQL 8（用户、文章、邮箱验证码、站点配置）</li>
-          <li><strong>登录方式</strong>：邮箱密码、邮箱验证码、GitHub OAuth</li>
+          <li><strong>登录方式</strong>：邮箱密码、邮箱验证码{{ oauthWayText }}</li>
         </ul>
       </section>
 
       <section class="block glass">
         <h2>怎么用</h2>
         <ol>
-          <li>注册账号或用邮箱验证码 / GitHub 登录</li>
+          <li>注册账号或用邮箱验证码{{ oauthSignInText }} 登录</li>
           <li>进入控制台，新建文章，支持 Markdown 与配图</li>
           <li>保存草稿或直接发布，发布后会出现在首页时间轴上</li>
         </ol>
@@ -57,6 +57,13 @@ import { useSiteStore } from '../stores/site';
 
 const site = useSiteStore();
 const palette = ['#03045e', '#023e8a', '#0077b6', '#0096c7', '#00b4d8', '#48cae4', '#90e0ef', '#ade8f4', '#caf0f8'];
+
+/** 第三方登录方式：按站点已启用的 provider 动态列出（无第三方时只提邮箱方式） */
+const oauthNames = computed(() => site.info.oauthProviders.map((p) => p.name).filter(Boolean));
+/** 「登录方式」条目里的补充说明 */
+const oauthWayText = computed(() => (oauthNames.value.length ? `、${oauthNames.value.join(' / ')} OAuth` : ''));
+/** 「怎么用」条目里的补充说明 */
+const oauthSignInText = computed(() => (oauthNames.value.length ? ` / ${oauthNames.value.join(' / ')}` : ''));
 
 // 管理员在后台以 HTML 编辑关于页；此处渲染前做最小净化（仅保留文本与链接/标题/列表等安全标签）
 const ALLOWED = new Set(['P', 'BR', 'HR', 'H1', 'H2', 'H3', 'H4', 'UL', 'OL', 'LI', 'STRONG', 'EM', 'B', 'I', 'CODE', 'PRE', 'BLOCKQUOTE', 'A', 'SPAN', 'IMG']);

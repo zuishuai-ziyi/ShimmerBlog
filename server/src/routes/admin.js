@@ -3,7 +3,8 @@ import bcrypt from 'bcryptjs';
 import { pool } from '../db.js';
 import { adminRequired } from '../middleware/auth.js';
 import { signAdminToken, applyDefaultNameColor, makeLimiter } from '../utils.js';
-import { getAllSettings, setSettings, githubConfig, googleConfig, smtpConfig, MAIL_TEMPLATES, tianaiCaptchaTypes, gocaptchaCaptchaTypes, TIANAI_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES, normalizeExternalLinkWhitelist } from '../services/settings.js';
+import { getAllSettings, setSettings, smtpConfig, MAIL_TEMPLATES, tianaiCaptchaTypes, gocaptchaCaptchaTypes, TIANAI_CAPTCHA_TYPES, GOCAPTCHA_CAPTCHA_TYPES, normalizeExternalLinkWhitelist, listOAuthProviders, createOAuthProvider, updateOAuthProvider, deleteOAuthProvider, getOAuthProviderById } from '../services/settings.js';
+import { normalizeProviderInput } from '../services/oauth.js';
 import {
   getAIConfig,
   normalizeFlow,
@@ -23,7 +24,7 @@ export const adminRouter = Router();
 
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
 
-const ADMIN_SELECT = 'id, email, name, name_color, bio, avatar_url, permissions, status, github_id, email_verified, created_at';
+const ADMIN_SELECT = 'id, email, name, name_color, bio, avatar_url, permissions, status, email_verified, created_at';
 const PERMISSION_KEYS = ['post'];
 const NAME_COLOR_RE = /^#?[0-9a-fA-F]{3,8}$/;
 
@@ -147,7 +148,25 @@ adminRouter.get('/users', adminRequired, async (req, res, next) => {
          (SELECT COUNT(*) FROM articles WHERE status = 'published') AS published,
          (SELECT COUNT(*) FROM articles WHERE status = 'draft') AS drafts`
     );
-    res.json({ items: rows, total, page, pageSize, stats: stat[0] });
+    // 第三方绑定关系（user_oauth_accounts 是唯一数据源，users 表旧列已废弃）
+    const bindMap = new Map();
+    const ids = rows.map((r) => r.id);
+    if (ids.length) {
+      const [binds] = await pool.query(
+        `SELECT user_id, provider_slug, provider_user_id FROM user_oauth_accounts
+         WHERE user_id IN (${ids.map(() => '?').join(',')}) ORDER BY id ASC`,
+        ids
+      );
+      for (const b of binds) {
+        if (!bindMap.has(b.user_id)) bindMap.set(b.user_id, []);
+        bindMap.get(b.user_id).push({
+          provider: b.provider_slug,
+          provider_user_id: String(b.provider_user_id),
+        });
+      }
+    }
+    const items = rows.map((r) => ({ ...r, oauth_providers: bindMap.get(r.id) || [] }));
+    res.json({ items, total, page, pageSize, stats: stat[0] });
   } catch (e) {
     next(e);
   }
@@ -216,12 +235,15 @@ adminRouter.patch('/users/:id', adminRequired, async (req, res, next) => {
   }
 });
 
-/** 删除用户：彻底删除（文章经 fk_articles_author ON DELETE CASCADE 级联删除） */
+/** 删除用户：彻底删除（文章经 fk_articles_author ON DELETE CASCADE 级联删除；第三方登录绑定同步删除） */
 adminRouter.delete('/users/:id', adminRequired, async (req, res, next) => {
   try {
     const id = Number(req.params.id);
     const [rows] = await pool.query('SELECT id FROM users WHERE id = ? LIMIT 1', [id]);
     if (!rows[0]) return res.status(404).json({ error: '用户不存在' });
+    // 先清掉第三方绑定：user_oauth_accounts 与 users 之间没有外键，
+    // 不清就会占用 UNIQUE(provider_slug, provider_user_id)，该第三方身份再也绑不到新用户
+    await pool.query('DELETE FROM user_oauth_accounts WHERE user_id = ?', [id]);
     await pool.query('DELETE FROM users WHERE id = ?', [id]);
     res.json({ ok: true });
   } catch (e) {
@@ -233,15 +255,21 @@ adminRouter.delete('/users/:id', adminRequired, async (req, res, next) => {
 adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
   try {
     const all = await getAllSettings();
-    const gh = await githubConfig();
-    const gg = await googleConfig();
     const smtp = await smtpConfig();
+    // 第三方登录配置已迁移到 oauth_providers 表（见 /admin/oauth-providers），旧的 4 个键与迁移标记键不再读写
+    const settingsView = { ...all };
+    for (const k of ['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret', 'oauth_providers_migrated']) {
+      delete settingsView[k];
+    }
+    // 已启用（且配齐 client_id/client_secret）的 provider，用于回传 githubEnabled/googleEnabled
+    const providerRows = await listOAuthProviders(true);
+    const enabledProviderSlugs = new Set(
+      providerRows.filter((p) => p.enabled && p.client_id && p.client_secret).map((p) => p.slug)
+    );
     res.json({
       settings: {
-        ...all,
+        ...settingsView,
         // 密钥不回传明文，只回传是否已配置
-        github_client_secret: all.github_client_secret ? '__KEEP__' : '',
-        google_client_secret: all.google_client_secret ? '__KEEP__' : '',
         smtp_pass: all.smtp_pass ? '__KEEP__' : '',
         recaptcha_secret_key: all.recaptcha_secret_key ? '__KEEP__' : '',
         // AI 审核配置是 JSON 字符串，掩码后回写
@@ -258,8 +286,8 @@ adminRouter.get('/settings', adminRequired, async (_req, res, next) => {
         defaultSubject: t.defaults.subject,
         defaultBody: t.defaults.body,
       })),
-      githubEnabled: gh.enabled,
-      googleEnabled: gg.enabled,
+      githubEnabled: enabledProviderSlugs.has('github'),
+      googleEnabled: enabledProviderSlugs.has('google'),
       smtpEnabled: !!smtp,
       // 可选验证码类型的白名单与当前选中值（CSV 原样回传，前端据此渲染多选）
       captchaTypes: {
@@ -354,9 +382,13 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
       });
     }
     // 密钥：'__KEEP__' 与空串都表示「不修改」，'__CLEAR__' 才是清空
-    for (const key of ['github_client_secret', 'google_client_secret', 'smtp_pass', 'recaptcha_secret_key']) {
+    for (const key of ['smtp_pass', 'recaptcha_secret_key']) {
       if (body[key] === '__KEEP__' || body[key] === '') delete body[key];
       else if (body[key] === '__CLEAR__') body[key] = '';
+    }
+    // 第三方登录配置已迁移到 oauth_providers 表：旧的 4 个键不再接受写入（直接忽略）
+    for (const key of ['github_client_id', 'github_client_secret', 'google_client_id', 'google_client_secret']) {
+      delete body[key];
     }
     // 非密文本字段（SMTP 主机/端口/用户/发件人）：'__CLEAR__' 同样视为清空，
     // 防止哨兵串被当成真实值存库（曾导致 smtp_host='__CLEAR__' 连不上）
@@ -432,13 +464,106 @@ adminRouter.put('/settings', adminRequired, async (req, res, next) => {
       }
     }
     const r = await setSettings(body);
-    const gh = await githubConfig();
-    const gg = await googleConfig();
     const smtp = await smtpConfig();
+    // 已启用（且配齐 client_id/client_secret）的 provider（旧的 github/google 键已迁移到 oauth_providers 表）
+    const providerRows = await listOAuthProviders(true);
+    const enabledProviderSlugs = new Set(
+      providerRows.filter((p) => p.enabled && p.client_id && p.client_secret).map((p) => p.slug)
+    );
     const cap = await captchaConfig();
     // 白名单回传归一化后的条目（未提交该字段时也回传当前生效值）
     const allAfter = await getAllSettings();
-    res.json({ ok: true, updated: r.updated, githubEnabled: gh.enabled, googleEnabled: gg.enabled, smtpEnabled: !!smtp, captchaEnabled: cap.enabled, externalLinkWhitelist: normalizeExternalLinkWhitelist(allAfter.external_link_whitelist) });
+    res.json({ ok: true, updated: r.updated, githubEnabled: enabledProviderSlugs.has('github'), googleEnabled: enabledProviderSlugs.has('google'), smtpEnabled: !!smtp, captchaEnabled: cap.enabled, externalLinkWhitelist: normalizeExternalLinkWhitelist(allAfter.external_link_whitelist) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/* ---------- 第三方登录 provider 管理（oauth_providers 表） ---------- */
+
+/** 管理端视图：client_secret 永不回传明文，只给 '__KEEP__' / '' 与 secret_set 标记 */
+function providerAdminView(p) {
+  if (!p) return null;
+  const secret = String(p.client_secret ?? '');
+  return {
+    id: p.id,
+    slug: p.slug,
+    name: p.name,
+    type: p.type,
+    client_id: p.client_id || '',
+    client_secret: secret ? '__KEEP__' : '',
+    secret_set: !!secret,
+    authorize_url: p.authorize_url || '',
+    token_url: p.token_url || '',
+    userinfo_url: p.userinfo_url || '',
+    scope: p.scope || '',
+    enabled: !!p.enabled,
+    sort_order: Number(p.sort_order ?? 0),
+    created_at: p.created_at,
+    updated_at: p.updated_at,
+  };
+}
+
+/** provider 列表：全量（含 disabled），按 sort_order、id 排序 */
+adminRouter.get('/oauth-providers', adminRequired, async (_req, res, next) => {
+  try {
+    const rows = await listOAuthProviders(true);
+    res.json({ items: rows.map(providerAdminView) });
+  } catch (e) {
+    next(e);
+  }
+});
+
+/** 新建：slug 格式/保留字、name、type、client_id 必填；generic 的三个端点必填且必须 https */
+adminRouter.post('/oauth-providers', adminRequired, async (req, res, next) => {
+  try {
+    const body = { ...(req.body ?? {}) };
+    // client_secret 哨兵：新建时没有「保留原值」语义，__KEEP__ / __CLEAR__ 一律当作空
+    if (body.client_secret === '__KEEP__' || body.client_secret === '__CLEAR__') {
+      body.client_secret = '';
+    }
+    const { ok, value, message } = normalizeProviderInput(body);
+    if (!ok) return res.status(400).json(badRequest(message));
+    const created = await createOAuthProvider(value);
+    res.json({ ok: true, item: providerAdminView(created) });
+  } catch (e) {
+    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json(badRequest('该 slug 已存在'));
+    next(e);
+  }
+});
+
+/** 更新：部分更新；client_secret 语义 '__KEEP__'/缺省=不改、'__CLEAR__'=清空、其他=新密钥 */
+adminRouter.put('/oauth-providers/:id', adminRequired, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json(badRequest('provider id 无效'));
+    const current = await getOAuthProviderById(id);
+    if (!current) return res.status(404).json(badRequest('provider 不存在'));
+    const body = { ...(req.body ?? {}) };
+    // client_secret 哨兵：'__KEEP__' = 保留原值（不下发该字段），'__CLEAR__' = 清空，其他 = 新密钥
+    if (body.client_secret === '__KEEP__' || body.client_secret === undefined) {
+      delete body.client_secret;
+    } else if (body.client_secret === '__CLEAR__') {
+      body.client_secret = '';
+    }
+    const { ok, value, message } = normalizeProviderInput(body, { partial: true, current });
+    if (!ok) return res.status(400).json(badRequest(message));
+    const updated = await updateOAuthProvider(id, value);
+    res.json({ ok: true, item: providerAdminView(updated) });
+  } catch (e) {
+    if (String(e?.code) === 'ER_DUP_ENTRY') return res.status(409).json(badRequest('该 slug 已存在'));
+    next(e);
+  }
+});
+
+/** 删除：同时清掉该 provider 名下的用户绑定 */
+adminRouter.delete('/oauth-providers/:id', adminRequired, async (req, res, next) => {
+  try {
+    const id = Number(req.params.id);
+    if (!Number.isFinite(id)) return res.status(400).json(badRequest('provider id 无效'));
+    const removed = await deleteOAuthProvider(id);
+    if (!removed) return res.status(404).json(badRequest('provider 不存在'));
+    res.json({ ok: true, deleted: id });
   } catch (e) {
     next(e);
   }

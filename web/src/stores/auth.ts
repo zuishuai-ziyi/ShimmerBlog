@@ -1,6 +1,14 @@
 import { defineStore } from 'pinia';
 import http, { errMsg } from '../api/http';
 
+/** 第三方账号绑定记录（后端 user_oauth_accounts 表的公开子集） */
+export interface OAuthAccount {
+  /** provider 的 slug（与站点配置里的 oauthProviders[].slug 对应） */
+  provider: string;
+  provider_user_id: string;
+  created_at?: string;
+}
+
 export interface User {
   id: number;
   email: string | null;
@@ -9,8 +17,8 @@ export interface User {
   bio: string | null;
   avatar_url: string | null;
   email_verified: number;
-  github_id: number | null;
-  google_id: string | null;
+  /** 已绑定的第三方账号（未绑定时后端返回空数组，缺省时按 [] 处理） */
+  oauth_accounts?: OAuthAccount[];
   has_password: boolean;
 }
 

@@ -32,6 +32,36 @@ function pickTypes(value: unknown, fallback: string[], allowlist: string[]): str
   return picked.length ? picked : fallback.slice();
 }
 
+/**
+ * 第三方登录 provider（后端 oauth_providers 表的公开子集，只含已启用且配置齐全的）
+ * slug 用作登录/绑定/解绑的路径参数，name 用于界面文案，type 决定图标与端点风格
+ */
+export interface OAuthProvider {
+  slug: string;
+  name: string;
+  type: 'github' | 'google' | 'generic';
+}
+
+/**
+ * 归一化后端下发的 oauthProviders：非数组 → 空列表；数组 → 去空/去重（slug 小写），
+ * 非法 type 归为 'generic'，name 缺失时回落 slug。避免旧后端/异常数据把界面渲染崩掉。
+ */
+function pickProviders(value: unknown): OAuthProvider[] {
+  if (!Array.isArray(value)) return [];
+  const picked: OAuthProvider[] = [];
+  const seen = new Set<string>();
+  for (const v of value) {
+    const o = (v ?? {}) as Partial<OAuthProvider>;
+    const slug = String(o.slug || '').trim().toLowerCase();
+    if (!slug || seen.has(slug)) continue;
+    const name = String(o.name || '').trim() || slug;
+    const type = o.type === 'github' || o.type === 'google' ? o.type : 'generic';
+    seen.add(slug);
+    picked.push({ slug, name, type });
+  }
+  return picked;
+}
+
 export interface SiteInfo {
   title: string;
   subtitle: string;
@@ -39,6 +69,8 @@ export interface SiteInfo {
   registerOpen: boolean;
   githubEnabled: boolean;
   googleEnabled: boolean;
+  /** 已启用的第三方登录 provider 列表（前端按此动态渲染登录/绑定入口） */
+  oauthProviders: OAuthProvider[];
   captchaEnabled: boolean;
   captchaProvider: 'gocaptcha' | 'recaptcha' | 'tianai';
   captchaApi: string;
@@ -65,6 +97,7 @@ export const useSiteStore = defineStore('site', {
       registerOpen: true,
       githubEnabled: false,
       googleEnabled: false,
+      oauthProviders: [] as OAuthProvider[],
       captchaEnabled: false,
       captchaProvider: 'gocaptcha',
       captchaApi: '',
@@ -88,6 +121,7 @@ export const useSiteStore = defineStore('site', {
         this.info = {
           ...this.info,
           ...info,
+          oauthProviders: pickProviders(info.oauthProviders),
           captchaTianaiTypes: pickTypes(info.captchaTianaiTypes, DEFAULT_TIANAI_TYPES, TIANAI_TYPE_ALLOWLIST),
           captchaGocaptchaTypes: pickTypes(info.captchaGocaptchaTypes, DEFAULT_GOCAPTCHA_TYPES, GOCAPTCHA_TYPE_ALLOWLIST),
           // 外站跳转白名单：归一化（去空/去非法/去重），非法条目丢弃 → 视为未命中 → 照常提示

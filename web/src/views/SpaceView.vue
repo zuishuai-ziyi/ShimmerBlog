@@ -73,6 +73,7 @@ import { useRoute } from 'vue-router';
 import http, { errMsg, isCaptchaRequired, isCaptchaFailure } from '../api/http';
 import { useAuthStore } from '../stores/auth';
 import { useSiteStore } from '../stores/site';
+import type { OAuthAccount } from '../stores/auth';
 import { useSilentPolling } from '../stores/polling';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import bundledAvatar from '../assets/default-avatar.svg';
@@ -80,6 +81,8 @@ import bundledAvatar from '../assets/default-avatar.svg';
 // 用户默认头像：后台可设置，未设置时用内置图
 const site = useSiteStore();
 const defaultAvatar = computed(() => site.info.defaultAvatarUrl || bundledAvatar);
+// 第三方 provider 名称（oauthProviders）来自站点配置，未加载时先拉一次
+if (!site.loaded) site.fetch();
 
 interface SpaceUser {
   id: number;
@@ -88,8 +91,8 @@ interface SpaceUser {
   avatar_url: string | null;
   bio: string;
   created_at: string;
-  github_id: number | null;
-  google_id: string | null;
+  /** 已绑定的第三方账号（后端未返回时为空） */
+  oauth_accounts?: OAuthAccount[];
 }
 interface SpaceArticle {
   id: number;
@@ -159,19 +162,27 @@ async function saveProfile() {
   await doSaveProfile();
 }
 
-/** 手动从第三方同步头像（仅绑定过 GitHub/Google 的用户可见；绑定了多个时分开两个按钮让用户选择来源） */
+/** 手动从第三方同步头像（仅绑定过第三方账号的用户可见；绑定了多个时分开多个按钮让用户选择来源） */
 const refreshingAvatar = ref(false);
+/** 已绑定的第三方 provider（slug 列表）：本人才可见，取登录用户的 oauth_accounts */
 const oauthAvatarSources = computed(() => {
-  const list: Array<'github' | 'google'> = [];
-  if (user.value?.github_id) list.push('github');
-  if (user.value?.google_id) list.push('google');
+  if (!isSelf.value) return [];
+  const list: string[] = [];
+  for (const a of auth.user?.oauth_accounts ?? []) {
+    const slug = String(a.provider || '').trim().toLowerCase();
+    if (slug && !list.includes(slug)) list.push(slug);
+  }
   return list;
 });
-function oauthAvatarLabel(p: 'github' | 'google') {
-  if (refreshingAvatar.value) return '同步中…';
-  return oauthAvatarSources.value.length > 1 ? `从 ${p === 'github' ? 'GitHub' : 'Google'} 同步头像` : '从第三方同步头像';
+/** provider slug → 展示名（站点配置里查；已停用的 provider 查不到时用 slug 兜底） */
+function providerName(slug: string) {
+  return site.info.oauthProviders.find((p) => p.slug === slug)?.name || slug;
 }
-async function refreshOAuthAvatar(provider?: 'github' | 'google') {
+function oauthAvatarLabel(p: string) {
+  if (refreshingAvatar.value) return '同步中…';
+  return oauthAvatarSources.value.length > 1 ? `从 ${providerName(p)} 同步头像` : '从第三方同步头像';
+}
+async function refreshOAuthAvatar(provider?: string) {
   if (refreshingAvatar.value) return;
   refreshingAvatar.value = true;
   editOk.value = false;
