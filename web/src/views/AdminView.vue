@@ -3596,19 +3596,28 @@ onUnmounted(() => {
 }
 
 /* 弹层 */
+/* 遮罩层：弹窗比视口高时遮罩本身可滚（鼠标在弹窗外也能滚动） */
 .modal-mask {
   position: fixed;
   inset: 0;
   background: rgba(15, 26, 46, 0.42);
   backdrop-filter: blur(3px);
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   justify-content: center;
+  overflow-y: auto;
+  padding: 20px 0;
   z-index: 100;
 }
 
 .modal {
   width: min(380px, calc(100vw - 40px));
+  /* 超出视口高度时弹窗内部滚动（否则底部按钮点不到） */
+  max-height: calc(100vh - 40px);
+  max-height: calc(100dvh - 40px);
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  margin: auto;
   background: var(--surface);
   border: 1px solid var(--border);
   border-radius: 16px;
@@ -3864,7 +3873,7 @@ onUnmounted(() => {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
   gap: 8px;
-  max-height: 172px;
+  max-height: 148px;
   overflow-y: auto;
   padding: 4px 2px;
 }
