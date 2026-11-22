@@ -497,6 +497,8 @@ function providerAdminView(p) {
     token_url: p.token_url || '',
     userinfo_url: p.userinfo_url || '',
     scope: p.scope || '',
+    icon: p.icon || '',
+    icon_url: p.icon_url || '',
     enabled: !!p.enabled,
     sort_order: Number(p.sort_order ?? 0),
     created_at: p.created_at,
@@ -512,6 +514,18 @@ adminRouter.get('/oauth-providers', adminRequired, async (_req, res, next) => {
   } catch (e) {
     next(e);
   }
+});
+
+/**
+ * 登录方式自定义图标上传：复用站点 Logo 的图片上传通道（png/jpg/gif/webp，≤8MB），
+ * 返回可直接写进 provider.icon_url 的本站路径。
+ */
+adminRouter.post('/oauth-providers/icon', adminRequired, (req, res) => {
+  imageUpload.single('file')(req, res, (err) => {
+    if (err) return res.status(400).json({ error: err.message || '图标上传失败' });
+    if (!req.file) return res.status(400).json({ error: '未收到图片文件' });
+    res.json({ url: `/uploads/images/${req.file.filename}` });
+  });
 });
 
 /** 新建：slug 格式/保留字、name、type、client_id 必填；generic 的三个端点必填且必须 https */

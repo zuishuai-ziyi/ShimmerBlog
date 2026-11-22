@@ -282,6 +282,25 @@ export function normalizeProviderInput(input, { partial = false, current = null 
     out.scope = sc;
   }
 
+  // icon：内置图标库里的 key（如 github / google / wechat / globe），留空 = 按 type 自动回退
+  if (raw.icon !== undefined || !partial) {
+    const ic = str(raw.icon !== undefined ? raw.icon : (partial ? cur.icon : '')).trim().toLowerCase();
+    if (ic && !/^[a-z0-9][a-z0-9_-]{0,49}$/.test(ic)) {
+      return fail('图标标识非法（只能小写字母、数字、下划线或短横线）');
+    }
+    out.icon = ic;
+  }
+
+  // icon_url：自定义图片（上传后的 /uploads/images/... 或外链 http(s)），优先于内置图标
+  if (raw.icon_url !== undefined || !partial) {
+    const iu = str(raw.icon_url !== undefined ? raw.icon_url : (partial ? cur.icon_url : '')).trim();
+    if (iu.length > 500) return fail('图标地址最长 500 字');
+    if (iu && !/^https?:\/\//i.test(iu) && !iu.startsWith('/uploads/')) {
+      return fail('图标地址必须以 http(s):// 开头，或本站 /uploads/ 路径');
+    }
+    out.icon_url = iu;
+  }
+
   // enabled / sort_order
   if (raw.enabled !== undefined) out.enabled = raw.enabled ? 1 : 0;
   if (raw.sort_order !== undefined) {

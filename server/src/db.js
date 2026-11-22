@@ -120,6 +120,8 @@ CREATE TABLE IF NOT EXISTS oauth_providers (
   token_url VARCHAR(500) NOT NULL DEFAULT '',
   userinfo_url VARCHAR(500) NOT NULL DEFAULT '',
   scope VARCHAR(200) NOT NULL DEFAULT '',
+  icon VARCHAR(50) NOT NULL DEFAULT '',
+  icon_url VARCHAR(500) NOT NULL DEFAULT '',
   enabled TINYINT(1) NOT NULL DEFAULT 1,
   sort_order INT NOT NULL DEFAULT 0,
   created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
@@ -259,6 +261,9 @@ export async function initDatabase() {
   await ensureColumn('users', 'remote_avatar_url', 'remote_avatar_url VARCHAR(500) NULL AFTER avatar_url');
   // 绑定表里记录 provider 头像原始地址（供「同步第三方头像」按 provider 取源）
   await ensureColumn('user_oauth_accounts', 'avatar_url', 'avatar_url VARCHAR(500) NULL AFTER provider_user_id');
+  // 登录方式图标：icon = 内置图标 key，icon_url = 自定义图片（上传后写 /uploads/images/...）
+  await ensureColumn('oauth_providers', 'icon', "icon VARCHAR(50) NOT NULL DEFAULT '' AFTER scope");
+  await ensureColumn('oauth_providers', 'icon_url', "icon_url VARCHAR(500) NOT NULL DEFAULT '' AFTER icon");
   await ensureColumn('articles', 'review_state', "review_state ENUM('none','pending','rejected') NOT NULL DEFAULT 'none' AFTER status");
   // 邮件通知订阅：notify_prefs 存 JSON 字符串（NULL = 用服务层默认值）
   await ensureColumn('users', 'notify_prefs', 'notify_prefs TEXT NULL AFTER updated_at');

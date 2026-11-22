@@ -184,7 +184,10 @@
 
         <!-- 第三方账号绑定：直接列在卡片内（不再套小节标题与分隔线） -->
         <div v-for="p in bindProviders" :key="p.slug" class="bind-row">
-          <span class="bind-name">{{ p.name }}</span>
+          <span class="bind-name">
+            <OauthIcon :icon="p.icon" :icon-url="p.icon_url" :type="p.type" :slug="p.slug" :size="15" />
+            {{ p.name }}
+          </span>
           <span :class="['bind-state', bound(p) ? 'on' : 'off']">{{ bound(p) ? '已绑定' : '未绑定' }}</span>
           <button
             v-if="bound(p)"
@@ -259,6 +262,7 @@ import { useSiteStore } from '../stores/site';
 import { useSilentPolling } from '../stores/polling';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
 import ChangePasswordDialog from '../components/ChangePasswordDialog.vue';
+import OauthIcon from '../components/OauthIcon.vue';
 import { formatDateTime } from '../utils/format';
 import { pendingStatusLabel, rejectedStatusLabel } from '../utils/review';
 import type { Article, ArticleBrief, ArticleReview, ReviewState } from '../types';
@@ -1421,6 +1425,9 @@ onMounted(async () => {
   border-top: 1px dashed rgba(255, 255, 255, 0.1);
 }
 .bind-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
   min-width: 72px;
   font-weight: 600;
   font-size: 14px;

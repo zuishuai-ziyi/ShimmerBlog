@@ -247,11 +247,14 @@
               <div v-else class="tbl-wrap">
                 <table class="tbl">
                   <thead>
-                    <tr><th>名称</th><th>标识</th><th>类型</th><th>Client ID</th><th>状态</th><th>排序</th><th></th></tr>
+                    <tr><th>名称</th><th>图标</th><th>标识</th><th>类型</th><th>Client ID</th><th>状态</th><th>排序</th><th></th></tr>
                   </thead>
                   <tbody>
                     <tr v-for="p in providers" :key="p.id">
                       <td>{{ p.name }}</td>
+                      <td class="dim">
+                        <OauthIcon :icon="p.icon" :icon-url="p.icon_url" :type="p.type" :slug="p.slug" :size="18" />
+                      </td>
                       <td class="dim"><code>{{ p.slug }}</code></td>
                       <td><span class="pill type-tag" :class="p.type">{{ providerTypeLabel(p.type) }}</span></td>
                       <td class="dim"><code :title="p.client_id">{{ shortenId(p.client_id) }}</code></td>
@@ -720,6 +723,37 @@
         <p v-else-if="providerForm.type === 'google'" class="hint">
           在 <a :href="ggAppUrl" target="_blank" rel="noopener">Google Cloud 控制台</a> 创建 OAuth 客户端（Web 应用），已获授权的重定向 URI 填下面的回调地址。
         </p>
+        <!-- 图标：内置图标库 + 自定义图片上传（登录页按钮上的图标） -->
+        <div class="icon-pick">
+          <span class="icon-pick-label">图标</span>
+          <div class="icon-pick-body">
+            <div class="icon-preview">
+              <OauthIcon :icon="providerForm.icon" :icon-url="providerForm.icon_url" :type="providerForm.type" :slug="providerForm.slug" :size="22" />
+              <span class="dim">登录页按钮上显示的图标</span>
+            </div>
+            <div class="icon-grid">
+              <button
+                v-for="ic in OAUTH_ICONS"
+                :key="ic.key"
+                type="button"
+                class="icon-cell"
+                :class="{ on: providerForm.icon === ic.key && !providerForm.icon_url }"
+                :title="ic.label"
+                @click="pickProviderIcon(ic.key)"
+              >
+                <OauthIcon :icon="ic.key" :size="18" />
+              </button>
+            </div>
+            <div class="ops inline">
+              <label class="file-btn">
+                {{ providerIconBusy ? '上传中…' : '上传自定义图标' }}
+                <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden @change="uploadProviderIcon" />
+              </label>
+              <button v-if="providerForm.icon_url" type="button" class="ghost sm danger" :disabled="providerIconBusy" @click="clearProviderIconUrl">移除自定义图片</button>
+            </div>
+            <p class="hint">上传的图片优先于内置图标；支持 png / jpg / gif / webp（≤ 8MB）。选内置图标会清除已上传的图片。</p>
+          </div>
+        </div>
         <label class="row"><span>Client ID</span><input v-model.trim="providerForm.client_id" placeholder="第三方应用的 Client ID" autocomplete="off" /></label>
         <label class="row"><span>Client Secret</span><input v-model="providerForm.client_secret" type="password" :placeholder="providerSecretPlaceholder" autocomplete="new-password" @input="onProviderSecretInput" /></label>
         <div class="ops inline">
@@ -758,6 +792,8 @@ import { useSilentPolling } from '../stores/polling';
 import { normalizeWhitelistEntries } from '../utils/externalLink';
 import SiteFooter from '../components/SiteFooter.vue';
 import CaptchaDialog from '../components/CaptchaDialog.vue';
+import OauthIcon from '../components/OauthIcon.vue';
+import { OAUTH_ICONS, OAUTH_TYPE_ICON } from '../utils/oauthIcons';
 import defaultAvatar from '../assets/default-avatar.svg';
 
 const admin = useAdminStore();
@@ -1155,6 +1191,10 @@ interface OauthProvider {
   token_url: string;
   userinfo_url: string;
   scope: string;
+  /** 内置图标 key（留空按 type / slug 回退） */
+  icon: string;
+  /** 自定义图片地址（优先于内置图标） */
+  icon_url: string;
   enabled: boolean | number;
   sort_order: number;
 }
@@ -1201,11 +1241,15 @@ const providerForm = reactive({
   token_url: '',
   userinfo_url: '',
   scope: '',
+  icon: '',
+  icon_url: '',
   enabled: true,
   sort_order: 0,
 });
 /** 已设置密钥（编辑时提示「留空=不修改」） */
 const providerSecretSet = ref(false);
+/** 图标上传中（期间禁用上传按钮） */
+const providerIconBusy = ref(false);
 /** 密钥提交语义：keep = 不改、set = 写入新值、clear = 清空 */
 const providerSecretMode = ref<'keep' | 'set' | 'clear'>('keep');
 const providerMsg = ref('');
@@ -1272,7 +1316,47 @@ function onProviderTypeChange() {
     for (const f of urlFields) providerForm[f] = nextPreset[f];
     if (!providerForm.scope || providerForm.scope === prevPreset.scope) providerForm.scope = nextPreset.scope;
   }
+  // 图标：没选过或还是上一类型的默认图标时，跟随新类型切换（自定义上传的图片不动）
+  const prevIcon = OAUTH_TYPE_ICON[providerPrevType];
+  const nextIcon = OAUTH_TYPE_ICON[next];
+  if (!providerForm.icon || providerForm.icon === prevIcon) providerForm.icon = nextIcon;
   providerPrevType = next;
+}
+
+/** 选内置图标：同时清掉已上传的自定义图片（内置图标与自定义图片二选一） */
+function pickProviderIcon(key: string) {
+  providerForm.icon = key;
+  providerForm.icon_url = '';
+}
+
+/** 移除已上传的自定义图片（回到内置图标） */
+function clearProviderIconUrl() {
+  providerForm.icon_url = '';
+}
+
+/** 上传自定义图标：走后台图片上传通道，返回的 /uploads/images/... 写进 icon_url */
+async function uploadProviderIcon(e: Event) {
+  const input = e.target as HTMLInputElement;
+  const file = input.files?.[0];
+  input.value = '';
+  if (!file) return;
+  if (file.size > 8 * 1024 * 1024) {
+    providerMsg.value = '图片不能超过 8MB';
+    return;
+  }
+  providerIconBusy.value = true;
+  providerMsg.value = '';
+  try {
+    const fd = new FormData();
+    fd.append('file', file);
+    const { data } = await adminHttp.post('/admin/oauth-providers/icon', fd);
+    providerForm.icon_url = String(data.url ?? '');
+    showFlash('✓ 图标已上传，保存后生效');
+  } catch (err) {
+    providerMsg.value = '图标上传失败：' + errMsg(err);
+  } finally {
+    providerIconBusy.value = false;
+  }
 }
 
 function openProviderCreate() {
@@ -1287,6 +1371,8 @@ function openProviderCreate() {
     token_url: '',
     userinfo_url: '',
     scope: '',
+    icon: '',
+    icon_url: '',
     enabled: true,
     sort_order: providers.value.length,
   });
@@ -1309,6 +1395,8 @@ function openProviderEdit(p: OauthProvider) {
     token_url: p.token_url,
     userinfo_url: p.userinfo_url,
     scope: p.scope,
+    icon: p.icon || '',
+    icon_url: p.icon_url || '',
     enabled: !!p.enabled,
     sort_order: p.sort_order,
   });
@@ -1344,6 +1432,12 @@ function validateProvider(): string {
   if (!providerForm.client_id.trim()) return 'Client ID 不能为空';
   if (providerForm.client_id.trim().length > 255) return 'Client ID 最长 255 字';
   if (providerForm.scope.trim().length > 200) return 'scope 最长 200 字';
+  const icon = providerForm.icon.trim().toLowerCase();
+  if (icon && !/^[a-z0-9][a-z0-9_-]{0,49}$/.test(icon)) return '图标标识只能用小写字母、数字、下划线或短横线';
+  const iconUrl = providerForm.icon_url.trim();
+  if (iconUrl && !/^https?:\/\//i.test(iconUrl) && !iconUrl.startsWith('/uploads/')) {
+    return '图标地址必须以 http(s):// 开头，或本站 /uploads/ 路径';
+  }
   const urls: Array<['authorize_url' | 'token_url' | 'userinfo_url', string]> = [
     ['authorize_url', '授权地址'],
     ['token_url', '令牌地址'],
@@ -1377,6 +1471,8 @@ async function saveProvider() {
       token_url: providerForm.token_url.trim(),
       userinfo_url: providerForm.userinfo_url.trim(),
       scope: providerForm.scope.trim(),
+      icon: providerForm.icon.trim().toLowerCase(),
+      icon_url: providerForm.icon_url.trim(),
       enabled: providerForm.enabled ? 1 : 0,
       sort_order: Number(providerForm.sort_order) || 0,
     };
@@ -3738,6 +3834,60 @@ onUnmounted(() => {
   color: var(--text-3);
   background: #f6f8fc;
   cursor: default;
+}
+
+/* 登录方式图标选择器（内置图标网格 + 自定义图片） */
+.icon-pick {
+  display: flex;
+  gap: 12px;
+  margin: 14px 0;
+}
+.icon-pick-label {
+  width: 84px;
+  flex: none;
+  padding-top: 6px;
+  color: var(--text-2);
+  font-size: 13px;
+}
+.icon-pick-body {
+  flex: 1;
+  min-width: 0;
+}
+.icon-preview {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+.icon-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(38px, 1fr));
+  gap: 8px;
+  max-height: 172px;
+  overflow-y: auto;
+  padding: 4px 2px;
+}
+.icon-cell {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  height: 38px;
+  color: var(--text-1);
+  background: #fff;
+  border: 1px solid var(--glass-border);
+  border-radius: 9px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s, box-shadow 0.15s;
+}
+.icon-cell:hover {
+  color: var(--blue);
+  border-color: var(--blue);
+}
+.icon-cell.on {
+  color: var(--blue);
+  border-color: var(--blue);
+  box-shadow: 0 0 0 2px rgb(37 99 235 / 20%);
 }
 
 @media (max-width: 720px) {

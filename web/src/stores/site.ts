@@ -35,11 +35,16 @@ function pickTypes(value: unknown, fallback: string[], allowlist: string[]): str
 /**
  * 第三方登录 provider（后端 oauth_providers 表的公开子集，只含已启用且配置齐全的）
  * slug 用作登录/绑定/解绑的路径参数，name 用于界面文案，type 决定图标与端点风格
+ * icon / icon_url：后台可配置的登录按钮图标（内置图标 key / 自定义图片地址）
  */
 export interface OAuthProvider {
   slug: string;
   name: string;
   type: 'github' | 'google' | 'generic';
+  /** 内置图标 key（留空按 type/slug 回退） */
+  icon?: string;
+  /** 自定义图片地址（优先于内置图标） */
+  icon_url?: string;
 }
 
 /**
@@ -56,8 +61,10 @@ function pickProviders(value: unknown): OAuthProvider[] {
     if (!slug || seen.has(slug)) continue;
     const name = String(o.name || '').trim() || slug;
     const type = o.type === 'github' || o.type === 'google' ? o.type : 'generic';
+    const icon = String(o.icon || '').trim().toLowerCase();
+    const icon_url = String(o.icon_url || '').trim();
     seen.add(slug);
-    picked.push({ slug, name, type });
+    picked.push({ slug, name, type, icon, icon_url });
   }
   return picked;
 }

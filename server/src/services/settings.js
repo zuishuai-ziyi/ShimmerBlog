@@ -253,6 +253,8 @@ const PROVIDER_FIELDS = [
   'token_url',
   'userinfo_url',
   'scope',
+  'icon',
+  'icon_url',
   'enabled',
   'sort_order',
 ];
@@ -596,7 +598,14 @@ export async function publicSiteInfo() {
     githubEnabled: enabledSlugs.has('github'),
     googleEnabled: enabledSlugs.has('google'),
     // 可用的第三方登录入口（前端按此渲染登录按钮）
-    oauthProviders: usable.map((p) => ({ slug: p.slug, name: p.name, type: p.type })),
+    oauthProviders: usable.map((p) => ({
+      slug: p.slug,
+      name: p.name,
+      type: p.type,
+      // 图标：icon = 内置图标 key（留空按 type 回退），icon_url = 自定义图片地址（优先于内置图标）
+      icon: p.icon || '',
+      icon_url: p.icon_url || '',
+    })),
     captchaEnabled: captchaEnabledOf(all),
     captchaProvider: captchaProviderOf(all),
     captchaApi: all.captcha_api || '',
