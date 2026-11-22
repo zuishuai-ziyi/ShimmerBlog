@@ -1,33 +1,21 @@
 <template>
-  <!-- 登录方式图标：优先渲染管理员上传的自定义图片，其次是内置图标（按 provider.icon / type / slug 回退） -->
-  <img
-    v-if="imgSrc"
-    class="oauth-icon oauth-icon-img"
-    :src="imgSrc"
-    :width="size"
-    :height="size"
-    :alt="alt"
-  />
-  <svg
-    v-else
-    class="oauth-icon"
-    :viewBox="def.viewBox"
-    :width="size"
-    :height="size"
-    aria-hidden="true"
-    focusable="false"
-  >
-    <path
-      v-for="(p, i) in def.paths"
-      :key="i"
-      :d="p.d"
-      :fill="p.fill ?? (p.stroke ? 'none' : 'currentColor')"
-      :stroke="p.stroke ? 'currentColor' : undefined"
-      :stroke-width="p.stroke ? (p.width ?? 1.7) : undefined"
-      stroke-linecap="round"
-      stroke-linejoin="round"
-    />
-  </svg>
+  <!-- 登录方式图标：优先渲染管理员上传的自定义图片，其次是内置图标（按 provider.icon / type / slug 回退）。
+       外层固定尺寸盒子：内置 SVG 与自定义图片占位完全一致，文字与图标的间距统一。 -->
+  <span class="oauth-icon-box" :style="{ width: size + 'px', height: size + 'px' }">
+    <img v-if="imgSrc" class="oauth-icon oauth-icon-img" :src="imgSrc" :alt="alt" />
+    <svg v-else class="oauth-icon" :viewBox="def.viewBox" aria-hidden="true" focusable="false">
+      <path
+        v-for="(p, i) in def.paths"
+        :key="i"
+        :d="p.d"
+        :fill="p.fill ?? (p.stroke ? 'none' : 'currentColor')"
+        :stroke="p.stroke ? 'currentColor' : undefined"
+        :stroke-width="p.stroke ? (p.width ?? 1.7) : undefined"
+        stroke-linecap="round"
+        stroke-linejoin="round"
+      />
+    </svg>
+  </span>
 </template>
 
 <script setup lang="ts">
@@ -65,9 +53,18 @@ const def = computed(() => getOauthIcon(resolveOauthIconKey(props.icon, props.ty
 </script>
 
 <style scoped>
+/* 固定尺寸盒子：内置 SVG 与自定义图片占位一致，按钮里的文字间距统一 */
+.oauth-icon-box {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex: none;
+  line-height: 0;
+}
 .oauth-icon {
   display: block;
-  flex: none;
+  width: 100%;
+  height: 100%;
 }
 .oauth-icon-img {
   object-fit: contain;

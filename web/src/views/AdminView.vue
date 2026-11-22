@@ -749,9 +749,10 @@
                 {{ providerIconBusy ? '上传中…' : '上传自定义图标' }}
                 <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" hidden @change="uploadProviderIcon" />
               </label>
+              <button v-if="providerForm.icon_url" type="button" class="ghost sm" :disabled="providerIconBusy" @click="trimProviderIcon">裁掉透明边距</button>
               <button v-if="providerForm.icon_url" type="button" class="ghost sm danger" :disabled="providerIconBusy" @click="clearProviderIconUrl">移除自定义图片</button>
             </div>
-            <p class="hint">上传的图片优先于内置图标；支持 png / jpg / gif / webp（≤ 8MB）。选内置图标会清除已上传的图片。</p>
+            <p class="hint">上传的图片优先于内置图标；支持 png / jpg / gif / webp（≤ 8MB）。上传时会自动裁掉透明边距并缩到 512px，图标大小与内置图标一致；选内置图标会清除已上传的图片。</p>
           </div>
         </div>
         <label class="row"><span>Client ID</span><input v-model.trim="providerForm.client_id" placeholder="第三方应用的 Client ID" autocomplete="off" /></label>
@@ -1334,6 +1335,92 @@ function clearProviderIconUrl() {
   providerForm.icon_url = '';
 }
 
+/** 对已上传的自定义图标重新裁掉透明边距（外链图片跨域读不到时会失败提示） */
+async function trimProviderIcon() {
+  const url = providerForm.icon_url.trim();
+  if (!url) return;
+  providerIconBusy.value = true;
+  providerMsg.value = '';
+  try {
+    const resp = await fetch(url);
+    if (!resp.ok) throw new Error('读取图片失败');
+    const blob = await resp.blob();
+    const file = new File([blob], 'icon.png', { type: blob.type || 'image/png' });
+    const prepared = await prepareProviderIcon(file);
+    if (prepared === file) {
+      providerMsg.value = '这张图片没有透明边距，无需处理';
+      return;
+    }
+    const fd = new FormData();
+    fd.append('file', prepared);
+    const { data } = await adminHttp.post('/admin/oauth-providers/icon', fd);
+    providerForm.icon_url = String(data.url ?? '');
+    showFlash('✓ 已裁掉透明边距，保存后生效');
+  } catch (err) {
+    providerMsg.value = '处理失败：' + errMsg(err);
+  } finally {
+    providerIconBusy.value = false;
+  }
+}
+
+/**
+ * 上传前处理自定义图标：
+ * 1) 裁掉四周透明边距（不少 logo 自带留白，不裁会让图标主体偏小、与文字的视觉间距显得过大）；
+ * 2) 最长边压到 512px（按钮里的图标只有十几像素，无需原图尺寸）。
+ * 任何一步失败都退回原文件，不阻断上传。
+ */
+async function prepareProviderIcon(file: File): Promise<File> {
+  try {
+    const bitmap = await createImageBitmap(file);
+    const maxSide = Math.max(bitmap.width, bitmap.height);
+    const scale = maxSide > 512 ? 512 / maxSide : 1;
+    const w = Math.max(1, Math.round(bitmap.width * scale));
+    const h = Math.max(1, Math.round(bitmap.height * scale));
+    const canvas = document.createElement('canvas');
+    canvas.width = w;
+    canvas.height = h;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) {
+      bitmap.close?.();
+      return file;
+    }
+    ctx.drawImage(bitmap, 0, 0, w, h);
+    bitmap.close?.();
+    // 扫描 alpha 找内容边界（JPEG 无 alpha → alpha 恒为 255，边界即整张图）
+    const data = ctx.getImageData(0, 0, w, h).data;
+    let minX = w;
+    let minY = h;
+    let maxX = -1;
+    let maxY = -1;
+    for (let y = 0; y < h; y++) {
+      for (let x = 0; x < w; x++) {
+        if (data[(y * w + x) * 4 + 3] > 8) {
+          if (x < minX) minX = x;
+          if (x > maxX) maxX = x;
+          if (y < minY) minY = y;
+          if (y > maxY) maxY = y;
+        }
+      }
+    }
+    if (maxX < 0) return file; // 全透明 → 原样上传
+    const hasPad = minX > 0 || minY > 0 || maxX < w - 1 || maxY < h - 1;
+    if (!hasPad && scale === 1) return file; // 无需处理
+    const cw = maxX - minX + 1;
+    const ch = maxY - minY + 1;
+    const out = document.createElement('canvas');
+    out.width = cw;
+    out.height = ch;
+    const octx = out.getContext('2d');
+    if (!octx) return file;
+    octx.drawImage(canvas, minX, minY, cw, ch, 0, 0, cw, ch);
+    const blob = await new Promise<Blob | null>((resolve) => out.toBlob(resolve, 'image/png'));
+    if (!blob) return file;
+    return new File([blob], file.name.replace(/\.[^.]+$/, '') + '.png', { type: 'image/png' });
+  } catch {
+    return file;
+  }
+}
+
 /** 上传自定义图标：走后台图片上传通道，返回的 /uploads/images/... 写进 icon_url */
 async function uploadProviderIcon(e: Event) {
   const input = e.target as HTMLInputElement;
@@ -1347,8 +1434,9 @@ async function uploadProviderIcon(e: Event) {
   providerIconBusy.value = true;
   providerMsg.value = '';
   try {
+    const prepared = await prepareProviderIcon(file);
     const fd = new FormData();
-    fd.append('file', file);
+    fd.append('file', prepared);
     const { data } = await adminHttp.post('/admin/oauth-providers/icon', fd);
     providerForm.icon_url = String(data.url ?? '');
     showFlash('✓ 图标已上传，保存后生效');
